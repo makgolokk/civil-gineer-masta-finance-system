@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Civil-Gineer Masta Accounting</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script defer src="cgm-services.js"></script>
+    <script defer src="cgm-app-v2.js"></script>
+  </head>
+  <body>
+    <section class="landing" id="landingView">
+      <div class="landing-inner">
+        <div class="brand landing-brand">
+          <div class="brand-mark">CGM</div>
+          <div>
+            <strong>Civil-Gineer Masta</strong>
+            <span>Integrated business platform</span>
+          </div>
+        </div>
+        <div class="landing-copy">
+          <p class="eyebrow">Choose workspace</p>
+          <h1>Front-office capture and back-office accounting, connected.</h1>
+          <p>Bookkeeping staff can capture daily documents while management reviews ledger, profitability, financial reports, and controls.</p>
+        </div>
+        <div class="portal-grid">
+          <button class="portal-card" data-portal-open="bookkeeping">
+            <i data-lucide="clipboard-list"></i>
+            <strong>Bookkeeping Portal</strong>
+            <span>Quotations, invoices, receipts, expenses, supplier bills, client/project capture.</span>
+          </button>
+          <button class="portal-card" data-portal-open="management">
+            <i data-lucide="chart-column"></i>
+            <strong>Accounting Management</strong>
+            <span>Dashboard, ledger, control accounts, reports, profitability, statements, and exports.</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="app-shell" id="appShell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">CGM</div>
+          <div>
+            <strong>Civil-Gineer Masta</strong>
+            <span>Accounting</span>
+          </div>
+        </div>
+        <nav class="nav-list" aria-label="Main navigation">
+          <button class="nav-item" data-view="bookDashboard" data-portal="bookkeeping"><i data-lucide="layout-dashboard"></i><span>Front-Office Dashboard</span></button>
+          <button class="nav-item" data-view="bookQuotations" data-portal="bookkeeping"><i data-lucide="file-plus-2"></i><span>Quotations</span></button>
+          <button class="nav-item" data-view="bookInvoices" data-portal="bookkeeping"><i data-lucide="file-text"></i><span>Invoices</span></button>
+          <button class="nav-item" data-view="bookReceipts" data-portal="bookkeeping"><i data-lucide="receipt"></i><span>Receipts</span></button>
+          <button class="nav-item" data-view="bookExpenses" data-portal="bookkeeping"><i data-lucide="wallet-cards"></i><span>Expenses & Bills</span></button>
+          <button class="nav-item" data-view="dashboard" data-portal="management"><i data-lucide="layout-dashboard"></i><span>Management Dashboard</span></button>
+          <button class="nav-item" data-view="accounts" data-portal="management"><i data-lucide="book-open"></i><span>Chart of Accounts</span></button>
+          <button class="nav-item" data-view="clients" data-portal="management"><i data-lucide="users"></i><span>Debtors</span></button>
+          <button class="nav-item" data-view="suppliers" data-portal="management"><i data-lucide="truck"></i><span>Creditors</span></button>
+          <button class="nav-item" data-view="sales" data-portal="management"><i data-lucide="file-text"></i><span>Sales</span></button>
+          <button class="nav-item" data-view="expenses" data-portal="management"><i data-lucide="wallet-cards"></i><span>Expenses</span></button>
+          <button class="nav-item" data-view="projects" data-portal="management"><i data-lucide="folder-kanban"></i><span>Projects & Services</span></button>
+          <button class="nav-item" data-view="cashbook" data-portal="management"><i data-lucide="landmark"></i><span>Cashbook</span></button>
+          <button class="nav-item" data-view="ledger" data-portal="management"><i data-lucide="list-tree"></i><span>General Ledger</span></button>
+          <button class="nav-item" data-view="journals" data-portal="management"><i data-lucide="square-pen"></i><span>Journals</span></button>
+          <button class="nav-item" data-view="reports" data-portal="management"><i data-lucide="chart-column"></i><span>Reports</span></button>
+        </nav>
+        <button class="portal-switch" id="portalSwitch"><i data-lucide="panel-left"></i><span>Switch workspace</span></button>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="workspaceLabel">Business control center</p>
+            <h1 id="pageTitle">Dashboard</h1>
+          </div>
+          <div class="top-actions">
+            <button class="secondary-button top-switch" id="topPortalSwitch"><i data-lucide="panel-left"></i><span>Workspaces</span></button>
+            <button class="mobile-menu" id="menuToggle" aria-label="Toggle menu"><i data-lucide="menu"></i></button>
+          </div>
+        </header>
+
+        <section class="view" id="bookDashboardView"></section>
+        <section class="view" id="bookQuotationsView"></section>
+        <section class="view" id="bookInvoicesView"></section>
+        <section class="view" id="bookReceiptsView"></section>
+        <section class="view" id="bookExpensesView"></section>
+        <section class="view active" id="dashboardView"></section>
+        <section class="view" id="accountsView"></section>
+        <section class="view" id="clientsView"></section>
+        <section class="view" id="suppliersView"></section>
+        <section class="view" id="salesView"></section>
+        <section class="view" id="expensesView"></section>
+        <section class="view" id="projectsView"></section>
+        <section class="view" id="cashbookView"></section>
+        <section class="view" id="ledgerView"></section>
+        <section class="view" id="journalsView"></section>
+        <section class="view" id="reportsView"></section>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="modalBackdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-header">
+          <h2 id="modalTitle"></h2>
+          <button class="icon-button" id="modalClose" aria-label="Close dialog"><i data-lucide="x"></i></button>
+        </div>
+        <div class="modal-body" id="modalBody"></div>
+      </section>
+    </div>
+  </body>
+</html>
