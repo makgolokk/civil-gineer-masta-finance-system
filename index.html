@@ -7,14 +7,13 @@
     <link rel="stylesheet" href="styles.css" />
     <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script defer src="cgm-services.js"></script>
-    <script defer src="cgm-app-v2.js"></script>
+    <script type="module" src="/src/main.js"></script>
   </head>
   <body>
     <section class="landing" id="landingView">
       <div class="landing-inner">
         <div class="brand landing-brand">
-          <div class="brand-mark">CGM</div>
+          <img class="brand-logo" src="assets/logo.png" alt="Civil-Gineer Masta logo" />
           <div>
             <strong>Civil-Gineer Masta</strong>
             <span>Integrated business platform</span>
@@ -43,7 +42,7 @@
     <div class="app-shell" id="appShell" hidden>
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">CGM</div>
+          <img class="brand-logo compact" src="assets/logo.png" alt="Civil-Gineer Masta logo" />
           <div>
             <strong>Civil-Gineer Masta</strong>
             <span>Accounting</span>
@@ -66,6 +65,10 @@
           <button class="nav-item" data-view="ledger" data-portal="management"><i data-lucide="list-tree"></i><span>General Ledger</span></button>
           <button class="nav-item" data-view="journals" data-portal="management"><i data-lucide="square-pen"></i><span>Journals</span></button>
           <button class="nav-item" data-view="reports" data-portal="management"><i data-lucide="chart-column"></i><span>Reports</span></button>
+          <button class="nav-item" data-view="settings" data-portal="management"><i data-lucide="settings"></i><span>Settings</span></button>
+          <button class="nav-item" data-view="audit" data-portal="management"><i data-lucide="shield-check"></i><span>Audit Log</span></button>
+          <button class="nav-item" data-view="help" data-portal="bookkeeping"><i data-lucide="circle-help"></i><span>Help</span></button>
+          <button class="nav-item" data-view="help" data-portal="management"><i data-lucide="circle-help"></i><span>Help</span></button>
         </nav>
         <button class="portal-switch" id="portalSwitch"><i data-lucide="panel-left"></i><span>Switch workspace</span></button>
       </aside>
@@ -98,7 +101,18 @@
         <section class="view" id="ledgerView"></section>
         <section class="view" id="journalsView"></section>
         <section class="view" id="reportsView"></section>
+        <section class="view" id="settingsView"></section>
+        <section class="view" id="auditView"></section>
+        <section class="view" id="helpView"></section>
       </main>
+    </div>
+
+    <div class="quick-fab" id="quickFab" hidden>
+      <button data-go-view="bookQuotations"><i data-lucide="file-plus-2"></i><span>New Quotation</span></button>
+      <button data-go-view="bookInvoices"><i data-lucide="file-text"></i><span>New Invoice</span></button>
+      <button data-go-view="clients"><i data-lucide="user-plus"></i><span>Add Client</span></button>
+      <button data-go-view="bookReceipts"><i data-lucide="receipt"></i><span>Record Payment</span></button>
+      <button data-go-view="help"><i data-lucide="circle-help"></i><span>Help</span></button>
     </div>
 
     <div class="modal-backdrop" id="modalBackdrop" hidden>
