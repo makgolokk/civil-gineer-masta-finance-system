@@ -1,8 +1,10 @@
-import { clientCodeFromNumber, nextPeriodCode, previewPeriodCode, reservePreviewedPeriodCode, syncCounterFromCode } from "./src/modules/numberingService.js";
+import { formatDateTime as formatDateTimeValue, formatLongDate as formatLongDateValue, formatMonthName, moneyFormatter } from "./src/modules/formatters.js";
+import { canRoleAction, canRoleRecordAction } from "./src/modules/permissions.js";
+import { nextOfficialNumber, periodKey, previewPeriodCode, reservePreviewedPeriodCode, syncCounterFromCode } from "./src/modules/numberingService.js";
 import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
 
 (async function () {
-  const money = new Intl.NumberFormat("en-BW", { style: "currency", currency: "BWP" });
+  const money = moneyFormatter;
   const qs = (selector, scope = document) => scope.querySelector(selector);
   const qsa = (selector, scope = document) => [...scope.querySelectorAll(selector)];
   const esc = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -28,31 +30,11 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function can(action) {
-    const role = currentUser().role;
-    if (action === "settings" || action === "manage-users") return role === "Super Admin";
-    if (action === "audit") return ["Super Admin", "Director"].includes(role);
-    if (role === "Super Admin") return true;
-    if (role === "Director") return !["manage-users", "settings"].includes(action);
-    if (role === "Accountant") return !["settings", "audit", "manage-users"].includes(action);
-    if (role === "Bookkeeper") return ["create", "edit-draft", "export", "view", "preview"].includes(action);
-    return action === "view";
+    return canRoleAction(currentUser().role, action);
   }
 
   function canRecordAction(typeName, action, record = null) {
-    if (action === "view") return can("view");
-    if (action === "export" || action === "preview") return can("export") || can("preview");
-    if (action === "create") return can("create");
-    if (action === "settings") return can("settings");
-    if (action === "manage-users") return can("manage-users");
-    if (action === "audit") return can("audit");
-    if (action === "restore" || action === "void" || action === "archive" || action === "delete") {
-      return ["Super Admin", "Director", "Accountant"].includes(currentUser().role);
-    }
-    if (action === "edit") {
-      if (["Super Admin", "Director", "Accountant"].includes(currentUser().role)) return true;
-      return currentUser().role === "Bookkeeper" && ["draft", "pending-review", "active"].includes(CGM.statusOf(record, "active"));
-    }
-    return can(action);
+    return canRoleRecordAction(currentUser().role, action, CGM.statusOf(record, "active"));
   }
 
   function requirePermission(typeName, action, record = null) {
@@ -861,7 +843,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function formatLongDate(dateValue) {
-    return new Date(`${dateValue}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    return formatLongDateValue(dateValue);
   }
 
   function financialYearLabel(date) {
@@ -869,7 +851,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function monthName(date) {
-    return date.toLocaleString(undefined, { month: "long" });
+    return formatMonthName(date);
   }
 
   function barChart(label, rows, key) {
@@ -1455,26 +1437,35 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     return String(value || "").split(/\r?\n|,/).map((line) => line.trim()).filter(Boolean);
   }
 
-  function handleClient(event) {
+  async function handleClient(event) {
     event.preventDefault();
     if (!requirePermission("client", "create")) return;
-    const data = Object.fromEntries(new FormData(event.currentTarget));
-    const number = CGM.nextNumber(state, "client", "C");
-    const client = { ...data, id: CGM.uid(), number, code: data.code || clientCodeFromNumber(number, CGM.today()), openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
-    state.clients.unshift(client);
-    save({ action: "create", recordType: "client", recordId: client.number, before: null, after: client });
+    try {
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      const number = await officialNumber("clientNumber", "C", state.clients, "number", "client number");
+      const code = await officialNumber("clientCode", "CL", state.clients, "code", "client code", { period: periodKey(CGM.today()) });
+      const client = { ...data, id: CGM.uid(), number, code, openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
+      state.clients.unshift(client);
+      save({ action: "create", recordType: "client", recordId: client.number, before: null, after: client });
+    } catch (error) {
+      numberingError("client", error);
+    }
   }
 
-  function handleSupplier(event) {
+  async function handleSupplier(event) {
     event.preventDefault();
     if (!requirePermission("supplier", "create")) return;
-    const data = Object.fromEntries(new FormData(event.currentTarget));
-    const supplier = { ...data, id: CGM.uid(), number: CGM.nextNumber(state, "supplier", "S"), openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
-    state.suppliers.unshift(supplier);
-    save({ action: "create", recordType: "supplier", recordId: supplier.number, before: null, after: supplier });
+    try {
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      const supplier = { ...data, id: CGM.uid(), number: await officialNumber("supplier", "S", state.suppliers, "number", "supplier number"), openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
+      state.suppliers.unshift(supplier);
+      save({ action: "create", recordType: "supplier", recordId: supplier.number, before: null, after: supplier });
+    } catch (error) {
+      numberingError("supplier", error);
+    }
   }
 
-  function handleSupplierBill(event) {
+  async function handleSupplierBill(event) {
     event.preventDefault();
     if (!requirePermission("supplierBill", "create")) return;
     const data = Object.fromEntries(new FormData(event.currentTarget));
@@ -1485,13 +1476,20 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     }
     const serviceId = items[0]?.serviceId || data.serviceId;
     const service = CGM.serviceById(state, serviceId);
-    const bill = { ...data, id: CGM.uid(), number: CGM.nextNumber(state, "supplierBill", docPrefix("supplierBillPrefix", "BILL")), serviceId, items, amount: CGM.documentTotal({ items }), accountId: data.accountId || service?.costAccountId || "general_expenses", projectCode: projectLabel(data.projectId, ""), status: "issued" };
+    let number;
+    try {
+      number = await officialNumber("supplierBill", docPrefix("supplierBillPrefix", "BILL"), state.supplierBills, "number", "supplier bill number");
+    } catch (error) {
+      numberingError("supplier bill", error);
+      return;
+    }
+    const bill = { ...data, id: CGM.uid(), number, serviceId, items, amount: CGM.documentTotal({ items }), accountId: data.accountId || service?.costAccountId || "general_expenses", projectCode: projectLabel(data.projectId, ""), status: "issued" };
     state.supplierBills.unshift(bill);
     save({ action: "create", recordType: "supplierBill", recordId: bill.number, before: null, after: bill });
     openPostSaveActions("supplierBill", bill);
   }
 
-  function handleInvoice(event) {
+  async function handleInvoice(event) {
     event.preventDefault();
     if (!requirePermission("invoice", "create")) return;
     const form = event.currentTarget;
@@ -1502,15 +1500,24 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       return;
     }
     const serviceId = items[0]?.serviceId || data.serviceId;
-    const project = findOrCreateProject({ clientId: data.clientId, serviceId, projectCode: reserveProjectCode(data.projectCode), projectName: data.projectName });
+    let projectCode;
+    let number;
+    try {
+      projectCode = await reserveProjectCode(data.projectCode);
+      number = await officialNumber("invoice", docPrefix("invoicePrefix", "INV"), state.invoices, "number", "invoice number");
+    } catch (error) {
+      numberingError("invoice", error);
+      return;
+    }
+    const project = await findOrCreateProject({ clientId: data.clientId, serviceId, projectCode, projectName: data.projectName });
     const service = CGM.serviceById(state, serviceId);
-    const invoice = { id: CGM.uid(), number: CGM.nextNumber(state, "invoice", docPrefix("invoicePrefix", "INV")), clientId: data.clientId, date: data.date, dueDate: data.dueDate, serviceId, projectId: project?.id || "", projectCode: project?.code || "", incomeAccountId: service?.incomeAccountId || "sales_income", notes: data.notes, items, discount: defaultDiscount(), taxRate: defaultTaxRate(), status: "issued" };
+    const invoice = { id: CGM.uid(), number, clientId: data.clientId, date: data.date, dueDate: data.dueDate, serviceId, projectId: project?.id || "", projectCode: project?.code || "", incomeAccountId: service?.incomeAccountId || "sales_income", notes: data.notes, items, discount: defaultDiscount(), taxRate: defaultTaxRate(), status: "issued" };
     state.invoices.unshift(invoice);
     save({ action: "create", recordType: "invoice", recordId: invoice.number, before: null, after: invoice });
     openPostSaveActions("invoice", invoice);
   }
 
-  function handlePayment(event) {
+  async function handlePayment(event) {
     event.preventDefault();
     if (!requirePermission("payment", "create")) return;
     const data = Object.fromEntries(new FormData(event.currentTarget));
@@ -1525,13 +1532,20 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       openModal("Check payment amount", `<p>The outstanding balance for ${esc(invoice.number)} is ${money.format(outstanding)}. Enter an amount greater than zero and not more than the outstanding balance.</p>`);
       return;
     }
-    const payment = { ...data, id: CGM.uid(), clientId: invoice?.clientId || "", projectId: invoice?.projectId || "", projectCode: invoice?.projectCode || "", serviceId: invoice?.serviceId || "", amount, receiptNumber: CGM.nextNumber(state, "receipt", docPrefix("receiptPrefix", "RCT")), status: "paid" };
+    let receiptNumber;
+    try {
+      receiptNumber = await officialNumber("receipt", docPrefix("receiptPrefix", "RCT"), state.payments, "receiptNumber", "receipt number");
+    } catch (error) {
+      numberingError("receipt", error);
+      return;
+    }
+    const payment = { ...data, id: CGM.uid(), clientId: invoice?.clientId || "", projectId: invoice?.projectId || "", projectCode: invoice?.projectCode || "", serviceId: invoice?.serviceId || "", amount, receiptNumber, status: "paid" };
     state.payments.unshift(payment);
     save({ action: "create", recordType: "payment", recordId: payment.receiptNumber, before: null, after: payment });
     openPostSaveActions("payment", payment);
   }
 
-  function handleExpense(event) {
+  async function handleExpense(event) {
     event.preventDefault();
     if (!requirePermission("expense", "create")) return;
     const form = event.currentTarget;
@@ -1543,12 +1557,19 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     }
     const serviceId = items[0]?.serviceId || data.serviceId;
     const service = CGM.serviceById(state, serviceId);
-    const expense = { ...data, id: CGM.uid(), serviceId, projectCode: projectLabel(data.projectId, ""), amount: CGM.documentTotal({ items }), items, description: data.description || items.map((item) => item.description).join("; "), expenseAccountId: service?.costAccountId || "general_expenses", paymentMethod: "Paid", status: "paid" };
+    let reference;
+    try {
+      reference = await officialNumber("expense", "EXP", state.expenses, "reference", "expense reference");
+    } catch (error) {
+      numberingError("expense", error);
+      return;
+    }
+    const expense = { ...data, id: CGM.uid(), reference, serviceId, projectCode: projectLabel(data.projectId, ""), amount: CGM.documentTotal({ items }), items, description: data.description || items.map((item) => item.description).join("; "), expenseAccountId: service?.costAccountId || "general_expenses", paymentMethod: "Paid", status: "paid" };
     state.expenses.unshift(expense);
     save({ action: "create", recordType: "expense", recordId: expense.reference || expense.id, before: null, after: expense });
   }
 
-  function handleBookQuote(event) {
+  async function handleBookQuote(event) {
     event.preventDefault();
     if (!requirePermission("quotation", "create")) return;
     const form = event.currentTarget;
@@ -1558,15 +1579,24 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       openModal("Quotation not saved", "<p>Add at least one quotation item with description, quantity, and rate.</p>");
       return;
     }
+    let number;
+    let projectCode;
+    try {
+      number = await officialNumber("quotation", docPrefix("quotationPrefix", "QT"), state.quotations, "number", "quotation number");
+      projectCode = await reserveProjectCode(data.projectCode);
+    } catch (error) {
+      numberingError("quotation", error);
+      return;
+    }
     const quote = {
       id: CGM.uid(),
-      number: CGM.nextNumber(state, "quotation", docPrefix("quotationPrefix", "QT")),
+      number,
       clientId: "",
       clientSnapshot: clientSnapshotFromEntry(data),
       date: data.date,
       validUntil: data.validUntil,
       serviceId: items[0]?.serviceId || data.serviceId,
-      projectCode: reserveProjectCode(data.projectCode),
+      projectCode,
       projectName: data.projectName,
       status: "draft",
       notes: data.notes,
@@ -1580,7 +1610,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     openPostSaveActions("quotation", quote);
   }
 
-  function handleBookInvoice(event) {
+  async function handleBookInvoice(event) {
     event.preventDefault();
     if (!requirePermission("invoice", "create")) return;
     const form = event.currentTarget;
@@ -1590,13 +1620,23 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       openModal("Invoice not saved", "<p>Add at least one invoice item with description, quantity, and rate.</p>");
       return;
     }
-    const client = findOrCreateClient(clientSnapshotFromEntry(data));
+    let client;
     const serviceId = items[0]?.serviceId || data.serviceId;
-    const project = findOrCreateProject({ clientId: client.id, serviceId, projectCode: reserveProjectCode(data.projectCode), projectName: data.projectName });
+    let number;
+    let projectCode;
+    try {
+      client = await findOrCreateClient(clientSnapshotFromEntry(data));
+      number = await officialNumber("invoice", docPrefix("invoicePrefix", "INV"), state.invoices, "number", "invoice number");
+      projectCode = await reserveProjectCode(data.projectCode);
+    } catch (error) {
+      numberingError("invoice", error);
+      return;
+    }
+    const project = await findOrCreateProject({ clientId: client.id, serviceId, projectCode, projectName: data.projectName });
     const service = CGM.serviceById(state, serviceId);
     const invoice = {
       id: CGM.uid(),
-      number: CGM.nextNumber(state, "invoice", docPrefix("invoicePrefix", "INV")),
+      number,
       clientId: client.id,
       date: data.date,
       dueDate: data.dueDate,
@@ -1616,7 +1656,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     openPostSaveActions("invoice", invoice);
   }
 
-  function handleBookReceipt(event) {
+  async function handleBookReceipt(event) {
     event.preventDefault();
     if (!requirePermission("payment", "create")) return;
     const data = Object.fromEntries(new FormData(event.currentTarget));
@@ -1628,6 +1668,13 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       openModal("Check payment amount", `<p>The outstanding balance for ${esc(invoice.number)} is ${money.format(outstanding)}. Enter an amount greater than zero and not more than the outstanding balance.</p>`);
       return;
     }
+    let receiptNumber;
+    try {
+      receiptNumber = await officialNumber("receipt", docPrefix("receiptPrefix", "RCT"), state.payments, "receiptNumber", "receipt number");
+    } catch (error) {
+      numberingError("receipt", error);
+      return;
+    }
     const payment = {
       ...data,
       id: CGM.uid(),
@@ -1636,7 +1683,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       projectCode: invoice.projectCode || "",
       serviceId: invoice.serviceId || "",
       amount,
-      receiptNumber: CGM.nextNumber(state, "receipt", docPrefix("receiptPrefix", "RCT")),
+      receiptNumber,
       status: "paid",
       source: "bookkeeping",
     };
@@ -1645,7 +1692,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     openPostSaveActions("payment", payment);
   }
 
-  function handleBookExpense(event) {
+  async function handleBookExpense(event) {
     event.preventDefault();
     if (!requirePermission("expense", "create")) return;
     const form = event.currentTarget;
@@ -1657,12 +1704,19 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     }
     const serviceId = items[0]?.serviceId || data.serviceId;
     const service = CGM.serviceById(state, serviceId);
-    const expense = { ...data, id: CGM.uid(), serviceId, projectCode: projectLabel(data.projectId, ""), amount: CGM.documentTotal({ items }), items, description: data.description || items.map((item) => item.description).join("; "), expenseAccountId: service?.costAccountId || "general_expenses", paymentMethod: "Paid", status: "paid", source: "bookkeeping" };
+    let reference;
+    try {
+      reference = await officialNumber("expense", "EXP", state.expenses, "reference", "expense reference");
+    } catch (error) {
+      numberingError("expense", error);
+      return;
+    }
+    const expense = { ...data, id: CGM.uid(), reference, serviceId, projectCode: projectLabel(data.projectId, ""), amount: CGM.documentTotal({ items }), items, description: data.description || items.map((item) => item.description).join("; "), expenseAccountId: service?.costAccountId || "general_expenses", paymentMethod: "Paid", status: "paid", source: "bookkeeping" };
     state.expenses.unshift(expense);
     save({ action: "create", recordType: "expense", recordId: expense.reference || expense.id, before: null, after: expense });
   }
 
-  function handleBookSupplierBill(event) {
+  async function handleBookSupplierBill(event) {
     event.preventDefault();
     if (!requirePermission("supplierBill", "create")) return;
     const form = event.currentTarget;
@@ -1672,16 +1726,24 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       openModal("Supplier bill not saved", "<p>Add at least one supplier bill item with description, service category, quantity, and rate.</p>");
       return;
     }
-    const supplier = findOrCreateSupplier({
-      name: data.supplierName,
-      email: data.email,
-      phone: data.phone,
-    });
     const serviceId = items[0]?.serviceId || data.serviceId;
     const service = CGM.serviceById(state, serviceId);
+    let supplier;
+    let number;
+    try {
+      supplier = await findOrCreateSupplier({
+        name: data.supplierName,
+        email: data.email,
+        phone: data.phone,
+      });
+      number = await officialNumber("supplierBill", docPrefix("supplierBillPrefix", "BILL"), state.supplierBills, "number", "supplier bill number");
+    } catch (error) {
+      numberingError("supplier bill", error);
+      return;
+    }
     const bill = {
       id: CGM.uid(),
-      number: CGM.nextNumber(state, "supplierBill", docPrefix("supplierBillPrefix", "BILL")),
+      number,
       supplierId: supplier.id,
       date: data.date,
       dueDate: data.dueDate,
@@ -1700,7 +1762,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     openPostSaveActions("supplierBill", bill);
   }
 
-  function handleCashTransfer(event) {
+  async function handleCashTransfer(event) {
     event.preventDefault();
     if (!requirePermission("cashTransaction", "create")) return;
     const data = Object.fromEntries(new FormData(event.currentTarget));
@@ -1708,10 +1770,17 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       openModal("Transfer not saved", "<p>Choose two different accounts for a bank/cash transfer.</p>");
       return;
     }
+    let number;
+    try {
+      number = await officialNumber("cash", "CASH", state.cashTransactions, "number", "cash transaction number");
+    } catch (error) {
+      numberingError("cash transaction", error);
+      return;
+    }
     const transfer = {
       ...data,
       id: CGM.uid(),
-      number: CGM.nextNumber(state, "cash", "CASH"),
+      number,
       amount: CGM.toNumber(data.amount),
       status: "posted",
     };
@@ -1719,7 +1788,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     save({ action: "create", recordType: "cashTransaction", recordId: transfer.number, before: null, after: transfer });
   }
 
-  function handleJournal(event) {
+  async function handleJournal(event) {
     event.preventDefault();
     if (!requirePermission("journal", "create")) return;
     const form = event.currentTarget;
@@ -1734,7 +1803,14 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       qs("#journalCheck").textContent = `Not balanced: debits ${money.format(check.debit)} / credits ${money.format(check.credit)}`;
       return;
     }
-    const journal = { id: CGM.uid(), number: CGM.nextNumber(state, "journal", "JNL"), date: data.date, memo: data.memo, lines: rows, status: "posted" };
+    let number;
+    try {
+      number = await officialNumber("journal", "JNL", state.journalEntries, "number", "journal number");
+    } catch (error) {
+      numberingError("journal", error);
+      return;
+    }
+    const journal = { id: CGM.uid(), number, date: data.date, memo: data.memo, lines: rows, status: "posted" };
     state.journalEntries.unshift(journal);
     save({ action: "create", recordType: "journal", recordId: journal.number, before: null, after: journal });
   }
@@ -1747,11 +1823,11 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       <label class="field full">Bill<select name="billId">${bills.map((bill) => `<option value="${bill.id}">${bill.number} - ${money.format(bill.amount - CGM.supplierBillPaid(state, bill.id))}</option>`).join("")}</select></label>
       ${input("date", "Payment date", "date", true, CGM.today())}
       ${input("amount", "Amount", "number", true, "", "0.01")}
-      ${input("reference", "Reference", "text", false, `PAY-${supplier?.number || ""}`)}
+      ${input("reference", "Reference (auto if blank)", "text", false, "")}
       <label class="field full">Paid from<select name="bankAccountId">${accountOptions(["Bank accounts", "Cash accounts"])}</select></label>
       <div class="actions full"><button class="primary-button" type="submit">Save payment</button></div>
     </form>`);
-    qs("#supplierPaymentForm").addEventListener("submit", (event) => {
+    qs("#supplierPaymentForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.currentTarget));
       const bill = state.supplierBills.find((item) => item.id === data.billId);
@@ -1760,6 +1836,14 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       if (!bill || amount <= 0 || amount > outstanding) {
         openModal("Payment not saved", `<p>Enter an amount greater than zero and not more than the outstanding supplier balance of ${money.format(outstanding)}.</p>`);
         return;
+      }
+      if (!data.reference) {
+        try {
+          data.reference = await officialNumber("supplierPayment", "SPAY", state.supplierPayments, "reference", "supplier payment reference");
+        } catch (error) {
+          numberingError("supplier payment", error);
+          return;
+        }
       }
       const payment = { ...data, id: CGM.uid(), supplierId, amount, status: "paid" };
       state.supplierPayments.unshift(payment);
@@ -1777,7 +1861,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     save({ action: "approve", recordType: "quotation", recordId: quote.number, before, after: state.quotations.find((item) => item.id === id), reason: "Quotation approved for invoicing" });
   }
 
-  function transferQuotationToInvoice(id) {
+  async function transferQuotationToInvoice(id) {
     const quote = state.quotations.find((item) => item.id === id);
     if (!quote) return;
     if (!requirePermission("invoice", "create")) return;
@@ -1789,16 +1873,25 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       openModal("Approval required", "<p>Approve the quotation before transferring it to an invoice.</p>");
       return;
     }
-    const client = quote.clientId
-      ? state.clients.find((item) => item.id === quote.clientId)
-      : findOrCreateClient(quote.clientSnapshot || { name: quotationClientName(quote) });
-    const project = quote.projectId
-      ? state.projects.find((item) => item.id === quote.projectId)
-      : findOrCreateProject({ clientId: client.id, serviceId: quote.serviceId, projectCode: quote.projectCode, projectName: quote.projectName || quote.items?.[0]?.description });
+    let client;
+    let project;
+    let number;
+    try {
+      client = quote.clientId
+        ? state.clients.find((item) => item.id === quote.clientId)
+        : await findOrCreateClient(quote.clientSnapshot || { name: quotationClientName(quote) });
+      project = quote.projectId
+        ? state.projects.find((item) => item.id === quote.projectId)
+        : await findOrCreateProject({ clientId: client.id, serviceId: quote.serviceId, projectCode: quote.projectCode, projectName: quote.projectName || quote.items?.[0]?.description });
+      number = await officialNumber("invoice", docPrefix("invoicePrefix", "INV"), state.invoices, "number", "invoice number");
+    } catch (error) {
+      numberingError("invoice", error);
+      return;
+    }
     const service = CGM.serviceById(state, quote.serviceId);
     const invoice = {
       id: CGM.uid(),
-      number: CGM.nextNumber(state, "invoice", docPrefix("invoicePrefix", "INV")),
+      number,
       clientId: client.id,
       quotationId: quote.id,
       date: CGM.today(),
@@ -1819,7 +1912,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     save({ action: "transfer-to-invoice", recordType: "quotation", recordId: quote.number, before: quote, after: { quote: state.quotations.find((item) => item.id === id), invoice }, reason: "Approved quotation converted to invoice" });
   }
 
-  function findOrCreateClient(snapshot) {
+  async function findOrCreateClient(snapshot) {
     const cleanName = String(snapshot.name || "").trim();
     const cleanEmail = String(snapshot.email || "").trim().toLowerCase();
     const existing = state.clients.find((client) => {
@@ -1828,11 +1921,12 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       return sameEmail || sameName;
     });
     if (existing) return existing;
-    const number = CGM.nextNumber(state, "client", "C");
+    const number = await officialNumber("clientNumber", "C", state.clients, "number", "client number");
+    const code = snapshot.code || await officialNumber("clientCode", "CL", state.clients, "code", "client code", { period: periodKey(CGM.today()) });
     const client = {
       id: CGM.uid(),
       number,
-      code: snapshot.code || clientCodeFromNumber(number, CGM.today()),
+      code,
       name: cleanName || "New client",
       contact: snapshot.contact || "",
       email: snapshot.email || "",
@@ -1846,14 +1940,15 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     return client;
   }
 
-  function findOrCreateProject({ clientId, serviceId, projectCode, projectName }) {
+  async function findOrCreateProject({ clientId, serviceId, projectCode, projectName }) {
     const cleanCode = String(projectCode || "").trim();
     const existing = state.projects.find((project) => cleanCode && String(project.code).toLowerCase() === cleanCode.toLowerCase());
     if (existing) return existing;
     if (!cleanCode && !projectName) return null;
+    const code = cleanCode || await officialNumber("projectCode", "PRJ", state.projects, "code", "project code", { period: periodKey(CGM.today()) });
     const project = {
       id: CGM.uid(),
-      code: cleanCode || nextPeriodCode(state, "project", "PRJ", CGM.today()),
+      code,
       name: projectName || cleanCode || "Unnamed project",
       clientId: clientId || "",
       serviceId: serviceId || "",
@@ -1865,7 +1960,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     return project;
   }
 
-  function findOrCreateSupplier(snapshot) {
+  async function findOrCreateSupplier(snapshot) {
     const cleanName = String(snapshot.name || "").trim();
     const cleanEmail = String(snapshot.email || "").trim().toLowerCase();
     const existing = state.suppliers.find((supplier) => {
@@ -1876,7 +1971,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     if (existing) return existing;
     const supplier = {
       id: CGM.uid(),
-      number: CGM.nextNumber(state, "supplier", "S"),
+      number: await officialNumber("supplier", "S", state.suppliers, "number", "supplier number"),
       name: cleanName || "New supplier",
       contact: "",
       email: snapshot.email || "",
@@ -2223,8 +2318,25 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     return previewPeriodCode(state, "client", "CL", CGM.today());
   }
 
-  function reserveProjectCode(code) {
-    return reservePreviewedPeriodCode(state, "project", "PRJ", code, CGM.today());
+  async function reserveProjectCode(code) {
+    const cleanCode = String(code || "").trim();
+    if (!cleanCode) return await officialNumber("projectCode", "PRJ", state.projects, "code", "project code", { period: periodKey(CGM.today()) });
+    const preview = previewPeriodCode(state, "project", "PRJ", CGM.today());
+    if (cleanCode === preview) {
+      return await officialNumber("projectCode", "PRJ", state.projects, "code", "project code", { period: periodKey(CGM.today()) });
+    }
+    if (state.projects.some((project) => String(project.code || "").toLowerCase() === cleanCode.toLowerCase())) {
+      return await officialNumber("projectCode", "PRJ", state.projects, "code", "project code", { period: periodKey(CGM.today()) });
+    }
+    return reservePreviewedPeriodCode(state, "project", "PRJ", cleanCode, CGM.today());
+  }
+
+  async function officialNumber(key, prefix, records, field, label, options = {}) {
+    return await nextOfficialNumber({ state, key, prefix, period: options.period || "", records, field, label });
+  }
+
+  function numberingError(label, error) {
+    notify("Numbering failed", error.message || `Could not generate a safe ${label} number. Please try again.`, "error");
   }
 
   function docPrefix(key, fallback) {
@@ -2623,7 +2735,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     });
   }
 
-  function duplicateRecord(typeName, id) {
+  async function duplicateRecord(typeName, id) {
     const key = recordCollection(typeName);
     const record = state[key]?.find((item) => item.id === id);
     if (!record) return;
@@ -2632,9 +2744,14 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     copy.id = CGM.uid();
     copy.status = "draft";
     copy.date = CGM.today();
-    if (typeName === "quotation") copy.number = CGM.nextNumber(state, "quotation", docPrefix("quotationPrefix", "QT"));
-    if (typeName === "invoice") copy.number = CGM.nextNumber(state, "invoice", docPrefix("invoicePrefix", "INV"));
-    if (typeName === "supplierBill") copy.number = CGM.nextNumber(state, "supplierBill", docPrefix("supplierBillPrefix", "BILL"));
+    try {
+      if (typeName === "quotation") copy.number = await officialNumber("quotation", docPrefix("quotationPrefix", "QT"), state.quotations, "number", "quotation number");
+      if (typeName === "invoice") copy.number = await officialNumber("invoice", docPrefix("invoicePrefix", "INV"), state.invoices, "number", "invoice number");
+      if (typeName === "supplierBill") copy.number = await officialNumber("supplierBill", docPrefix("supplierBillPrefix", "BILL"), state.supplierBills, "number", "supplier bill number");
+    } catch (error) {
+      numberingError(title(typeName), error);
+      return;
+    }
     state[key].unshift(copy);
     save({ action: "duplicate", recordType: typeName, recordId: recordNumber(typeName, copy), before: record, after: copy, reason: "Duplicated from existing record" });
   }

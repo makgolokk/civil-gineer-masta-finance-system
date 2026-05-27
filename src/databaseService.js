@@ -103,6 +103,7 @@ function tablePayload(collection, record) {
     return {
       ...common,
       project_id: record.projectId || null,
+      reference: record.reference || "",
       expense_date: record.date || null,
       category: record.category || "",
       vendor: record.vendor || "",
@@ -119,6 +120,24 @@ function tablePayload(collection, record) {
       bill_date: record.date || null,
       due_date: record.dueDate || null,
       amount: Number(record.amount || documentAmount(record)),
+    };
+  }
+
+  if (collection === "supplierPayments") {
+    return {
+      ...common,
+      supplier_id: record.supplierId || null,
+      bill_id: record.billId || null,
+      reference: record.reference || "",
+      payment_date: record.date || null,
+      amount: Number(record.amount || 0),
+    };
+  }
+
+  if (collection === "journalEntries" || collection === "cashTransactions") {
+    return {
+      ...common,
+      number: record.number || "",
     };
   }
 

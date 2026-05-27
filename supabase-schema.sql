@@ -103,6 +103,7 @@ create table if not exists public.payments (
 create table if not exists public.expenses (
   id uuid primary key default gen_random_uuid(),
   project_id uuid null references public.projects(id) on delete set null,
+  reference text,
   expense_date date,
   category text,
   vendor text,
@@ -131,6 +132,7 @@ create table if not exists public.supplier_payments (
   id uuid primary key default gen_random_uuid(),
   supplier_id uuid null references public.suppliers(id) on delete set null,
   bill_id uuid null references public.supplier_bills(id) on delete set null,
+  reference text,
   payment_date date,
   amount numeric(14, 2) not null default 0,
   status text not null default 'paid',
@@ -174,7 +176,14 @@ create table if not exists public.company_settings (
 );
 
 alter table public.clients add column if not exists code text;
+alter table public.expenses add column if not exists reference text;
+alter table public.supplier_payments add column if not exists reference text;
 
+-- Collision-safe application sequence store.
+-- Each row represents the next value for one business sequence, optionally scoped by period_key.
+-- Empty period_key sequences are used for official documents such as invoices, receipts, expenses,
+-- supplier bills, journal entries, supplier payments, and cash transfer references.
+-- Month/year period_key sequences are used for searchable client and project codes such as CL-2026-05-0001.
 create table if not exists public.app_sequences (
   sequence_key text not null,
   period_key text not null default '',
@@ -183,6 +192,13 @@ create table if not exists public.app_sequences (
   primary key (sequence_key, period_key)
 );
 
+comment on table public.app_sequences is 'Atomic sequence counters used by next_app_number() for collision-safe Civil-Gineer Masta business numbers.';
+comment on column public.app_sequences.sequence_key is 'Logical sequence name, for example invoice, quotation, receipt, clientCode, projectCode, expense, supplierBill, journal, or cash.';
+comment on column public.app_sequences.period_key is 'Optional YYYY-MM period scope for codes that include month/year. Empty string means one continuous sequence.';
+comment on column public.app_sequences.next_value is 'The next numeric value to issue for this sequence and period.';
+
+-- Atomic RPC used by the web app before saving new official records.
+-- The insert/on-conflict update runs inside PostgreSQL, so two users cannot receive the same number.
 create or replace function public.next_app_number(
   p_sequence_key text,
   p_prefix text,
@@ -191,6 +207,7 @@ create or replace function public.next_app_number(
 returns text
 language plpgsql
 security definer
+set search_path = public
 as $$
 declare
   current_value bigint;
@@ -210,6 +227,8 @@ begin
 end;
 $$;
 
+comment on function public.next_app_number(text, text, text) is 'Returns the next formatted app number using app_sequences. Use period_key for month/year codes and an empty period for continuous document numbers.';
+
 create index if not exists idx_projects_client_id on public.projects(client_id);
 create index if not exists idx_quotations_client_id on public.quotations(client_id);
 create index if not exists idx_quotations_project_id on public.quotations(project_id);
@@ -225,7 +244,11 @@ create unique index if not exists idx_projects_code_unique on public.projects(co
 create unique index if not exists idx_quotations_number_unique on public.quotations(number);
 create unique index if not exists idx_invoices_number_unique on public.invoices(number);
 create unique index if not exists idx_payments_receipt_number_unique on public.payments(receipt_number) where receipt_number is not null and receipt_number <> '';
+create unique index if not exists idx_expenses_reference_unique on public.expenses(reference) where reference is not null and reference <> '';
 create unique index if not exists idx_supplier_bills_number_unique on public.supplier_bills(number);
+create unique index if not exists idx_supplier_payments_reference_unique on public.supplier_payments(reference) where reference is not null and reference <> '';
+create unique index if not exists idx_journal_entries_number_unique on public.journal_entries(number) where number is not null and number <> '';
+create unique index if not exists idx_cash_transactions_number_unique on public.cash_transactions(number) where number is not null and number <> '';
 
 drop trigger if exists set_users_updated_at on public.users;
 create trigger set_users_updated_at before update on public.users for each row execute function public.set_updated_at();
@@ -245,6 +268,14 @@ drop trigger if exists set_expenses_updated_at on public.expenses;
 create trigger set_expenses_updated_at before update on public.expenses for each row execute function public.set_updated_at();
 drop trigger if exists set_supplier_bills_updated_at on public.supplier_bills;
 create trigger set_supplier_bills_updated_at before update on public.supplier_bills for each row execute function public.set_updated_at();
+drop trigger if exists set_supplier_payments_updated_at on public.supplier_payments;
+create trigger set_supplier_payments_updated_at before update on public.supplier_payments for each row execute function public.set_updated_at();
+drop trigger if exists set_journal_entries_updated_at on public.journal_entries;
+create trigger set_journal_entries_updated_at before update on public.journal_entries for each row execute function public.set_updated_at();
+drop trigger if exists set_cash_transactions_updated_at on public.cash_transactions;
+create trigger set_cash_transactions_updated_at before update on public.cash_transactions for each row execute function public.set_updated_at();
+drop trigger if exists set_audit_log_updated_at on public.audit_log;
+create trigger set_audit_log_updated_at before update on public.audit_log for each row execute function public.set_updated_at();
 drop trigger if exists set_company_settings_updated_at on public.company_settings;
 create trigger set_company_settings_updated_at before update on public.company_settings for each row execute function public.set_updated_at();
 
