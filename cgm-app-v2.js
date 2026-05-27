@@ -9,6 +9,7 @@
   let appError = window.CGMDatabaseError || "";
   let activePortal = "";
   let activeView = "dashboard";
+  let quickFabOpen = false;
   let dashboardFilter = {
     mode: "month",
     month: CGM.today().slice(0, 7),
@@ -133,7 +134,7 @@
     qs("#appShell").hidden = false;
     document.body.dataset.portal = portal;
     qsa(".nav-item").forEach((button) => {
-      button.hidden = button.dataset.portal !== portal;
+      button.hidden = Boolean(button.dataset.portal) && button.dataset.portal !== portal;
     });
     setView(portal === "bookkeeping" ? "bookDashboard" : "dashboard");
   }
@@ -219,7 +220,8 @@
 
   function setView(view) {
     activeView = view;
-    qsa(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === view && (!activePortal || button.dataset.portal === activePortal)));
+    quickFabOpen = false;
+    qsa(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === view && (!button.dataset.portal || button.dataset.portal === activePortal)));
     qsa(".view").forEach((section) => section.classList.toggle("active", section.id === `${view}View`));
     qs("#pageTitle").textContent = title(view);
     qs("#workspaceLabel").textContent = activePortal === "bookkeeping" ? "Front-office bookkeeping" : "Accounting management";
@@ -246,7 +248,46 @@
     renderDataStatus();
     bindItemEditors();
     decorateTables();
-    qs("#quickFab").hidden = !activePortal;
+    renderQuickFab();
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function quickActionsForView() {
+    if (activePortal === "bookkeeping" && activeView === "bookDashboard") {
+      return [
+        ["bookQuotations", "New Quote", "file-plus-2"],
+        ["bookInvoices", "New Invoice", "file-text"],
+        ["bookReceipts", "Receipt", "receipt"],
+        ["bookExpenses", "Expense", "wallet-cards"],
+      ];
+    }
+    if (activePortal === "management" && activeView === "dashboard") {
+      return [
+        ["clients", "Add Client", "user-plus"],
+        ["sales", "Sales", "file-text"],
+        ["expenses", "Expense", "wallet-cards"],
+        ["reports", "Reports", "chart-column"],
+      ];
+    }
+    return [];
+  }
+
+  function renderQuickFab() {
+    const fab = qs("#quickFab");
+    const menu = qs("#quickFabMenu");
+    const toggle = qs("#quickFabToggle");
+    if (!fab || !menu || !toggle) return;
+    const actions = quickActionsForView();
+    fab.hidden = !activePortal || !actions.length;
+    fab.classList.toggle("open", quickFabOpen && actions.length > 0);
+    toggle.setAttribute("aria-expanded", String(quickFabOpen && actions.length > 0));
+    menu.innerHTML = actions.map(([view, label, icon]) => `<button class="quick-fab-item" data-go-view="${view}"><i data-lucide="${icon}"></i><span>${esc(label)}</span></button>`).join("");
+  }
+
+  function closeQuickFab() {
+    if (!quickFabOpen) return;
+    quickFabOpen = false;
+    renderQuickFab();
     if (window.lucide) lucide.createIcons();
   }
 
@@ -2656,8 +2697,16 @@
   }
 
   document.addEventListener("click", (event) => {
+    const clickedFab = event.target.closest?.("#quickFab");
+    if (quickFabOpen && !clickedFab) closeQuickFab();
     const button = event.target.closest("button");
     if (!button) return;
+    if (button.id === "quickFabToggle") {
+      quickFabOpen = !quickFabOpen;
+      renderQuickFab();
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
     if (button.dataset.addItem) {
       const editor = qs(`[data-items-editor="${CSS.escape(button.dataset.addItem)}"]`);
       qs(".item-rows", editor)?.insertAdjacentHTML("beforeend", itemRow());
@@ -2683,6 +2732,7 @@
     if (button.dataset.restoreJson !== undefined) qs("#restoreJsonInput")?.click();
     if (button.dataset.goView) {
       closeModal();
+      closeQuickFab();
       setView(button.dataset.goView);
     }
     if (button.id === "portalSwitch" || button.id === "topPortalSwitch") showLanding();
@@ -2717,6 +2767,8 @@
   qs("#modalBackdrop").addEventListener("click", (event) => {
     if (event.target.id === "modalBackdrop") closeModal();
   });
+
+  window.addEventListener("scroll", closeQuickFab, { passive: true });
 
   render();
   showLanding();
