@@ -1,9 +1,29 @@
 (function () {
   const STORAGE_KEY = "cgm-accounting-v2";
   const LEGACY_KEY = "cgm-accounting-v1";
+  const RECOVERY_KEY = "cgm-accounting-v2-recovery";
   const today = () => new Date().toISOString().slice(0, 10);
   const uid = () => crypto.randomUUID();
   const toNumber = (value) => Number(value || 0);
+
+  function readStoredState(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      console.warn(`Could not read local recovery state ${key}`, error);
+      return null;
+    }
+  }
+
+  function writeStoredState(key, state) {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+      localStorage.setItem(RECOVERY_KEY, JSON.stringify({ savedAt: new Date().toISOString(), state }));
+    } catch (error) {
+      console.warn(`Could not write local recovery state ${key}`, error);
+    }
+  }
 
   const accounts = [
     { id: "bank_account", code: "1000", name: "Bank Account", type: "Assets", category: "Bank accounts", cashFlow: "Operating" },
@@ -363,20 +383,25 @@
 
   async function load() {
     const emptyState = initialState();
-    if (!window.CGMDatabase) return normalize(emptyState);
+    const localState = readStoredState(STORAGE_KEY);
+    const legacyState = readStoredState(LEGACY_KEY);
+    if (!window.CGMDatabase) return normalize(localState || (legacyState ? migrateLegacy(legacyState) : emptyState));
 
     try {
       const databaseState = await window.CGMDatabase.loadState(emptyState);
-      return normalize(databaseState);
+      const next = normalize(databaseState);
+      writeStoredState(STORAGE_KEY, next);
+      return next;
     } catch (error) {
       console.error("Supabase load failed", error);
       window.CGMDatabaseError = error.message || "Could not load Supabase data.";
-      return normalize(emptyState);
+      return normalize(localState || (legacyState ? migrateLegacy(legacyState) : emptyState));
     }
   }
 
   async function save(state) {
     const next = normalize(state);
+    writeStoredState(STORAGE_KEY, next);
     if (!window.CGMDatabase) return;
     await window.CGMDatabase.saveState(next);
   }

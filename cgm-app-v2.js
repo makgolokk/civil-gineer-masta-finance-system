@@ -5,6 +5,8 @@ import { exportClientStatementPdf, exportInvoicePdf, exportQuotationPdf, exportR
 import { accountName as lookupAccountName, clientName as lookupClientName, clientSnapshotFromEntry as buildClientSnapshot, projectLabel as lookupProjectLabel, quotationClientName as lookupQuotationClientName, serviceName as lookupServiceName, supplierName as lookupSupplierName } from "./src/modules/clientProjectUtils.js";
 import { buildDashboardModel, inPeriod as isDateInPeriod, selectedPeriod as resolveSelectedPeriod } from "./src/modules/dashboardUtils.js";
 import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMiniReportTable, tableHtml as renderTableHtml } from "./src/modules/tableUtils.js";
+import { auditChangeRows, auditOptions, filterAuditEntries, formatAuditValue as formatAuditDisplayValue, parseAuditValue, summarizeAuditEntry } from "./src/modules/auditUtils.js";
+import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, parseBackupText } from "./src/modules/backupRecovery.js";
 
 (async function () {
   const money = moneyFormatter;
@@ -24,6 +26,7 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     quarter: `${new Date(CGM.today()).getFullYear()}-Q${Math.floor(new Date(CGM.today()).getMonth() / 3) + 1}`,
     year: String(new Date(CGM.today()).getFullYear()),
   };
+  let auditFilters = { action: "", module: "", fromDate: "", toDate: "" };
 
   const sensitiveTypes = ["invoice", "payment", "receipt", "expense", "supplierBill", "supplierPayment", "journal", "cashTransaction", "settings"];
   let pendingConfirmAction = null;
@@ -49,7 +52,7 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
   function addAudit(action, recordType, recordId, beforeValue, afterValue, reason = "") {
     const user = currentUser();
     state.auditLog = state.auditLog || [];
-    state.auditLog.unshift({
+    const entry = {
       id: CGM.uid(),
       at: new Date().toISOString(),
       userId: user.id,
@@ -61,7 +64,9 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
       oldValue: compactJson(beforeValue),
       newValue: compactJson(afterValue),
       reason,
-    });
+    };
+    state.auditLog.unshift(entry);
+    return entry;
   }
 
   function compactJson(value) {
@@ -78,7 +83,7 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
       notify("Save already in progress", "Please wait for the current save to finish before trying again.", "warning");
       return false;
     }
-    if (audit?.action) addAudit(audit.action, audit.recordType, audit.recordId, audit.before, audit.after, audit.reason);
+    const auditEntry = audit?.action ? addAudit(audit.action, audit.recordType, audit.recordId, audit.before, audit.after, audit.reason) : null;
     isSaving = true;
     appError = "";
     render();
@@ -89,6 +94,7 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     } catch (error) {
       console.error("Supabase save failed", error);
       appError = error.message || "Could not save changes to Supabase.";
+      if (auditEntry) state.auditLog = (state.auditLog || []).filter((entry) => entry.id !== auditEntry.id);
       notify("Save failed", appError, "error");
       return false;
     } finally {
@@ -1057,10 +1063,17 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
         ${documentPreview({ title: "INVOICE", number: `${doc.invoicePrefix}-0001`, clientName: "Sample Client", projectName: "Sample Project", rows: [["Consultation Fee", "1", "850.00", "850.00"], ["Project Design", "1", "5,000.00", "5,000.00"]], total: 5850 })}
       </section>
       <section class="panel">
-        <div class="table-head"><div><h2>Data safety</h2><p>Use local backup files as an additional safety layer while Supabase is the main database.</p></div></div>
+        <div class="table-head"><div><h2>Data safety and recovery</h2><p>Use backup files before major changes. The browser also keeps a local recovery copy after successful saves.</p></div></div>
+        <div class="backup-summary">
+          ${miniReportTable("Current data snapshot", backupCountRows(backupCounts(state)), ["Area", "Records"])}
+          <div class="safety-note">
+            <strong>Recommended routine</strong>
+            <p>Download a backup before restoring data, changing settings, or doing month-end review. Restore files are validated before they overwrite the current workspace.</p>
+          </div>
+        </div>
         <div class="actions">
-          <button class="secondary-button" data-backup-json><i data-lucide="download"></i>Backup JSON</button>
-          <button class="secondary-button" data-restore-json><i data-lucide="upload"></i>Restore JSON</button>
+          <button class="secondary-button" data-backup-json><i data-lucide="download"></i>Download backup</button>
+          <button class="danger-button" data-restore-json><i data-lucide="upload"></i>Restore from backup</button>
         </div>
         <input id="restoreJsonInput" type="file" accept="application/json" hidden>
       </section>
@@ -1080,49 +1093,51 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
       qs("#auditView").innerHTML = accessPanel("Audit Log", "Only Super Admin and Directors can view the full audit history.");
       return;
     }
-    const rows = (state.auditLog || []).slice(0, 250).map((entry) => [
+    const allEntries = state.auditLog || [];
+    const entries = filterAuditEntries(allEntries, auditFilters);
+    const rows = entries.slice(0, 300).map((entry) => [
       formatDateTime(entry.at),
       entry.userName,
       entry.role,
-      entry.action,
-      `${entry.recordType} ${entry.recordId || ""}`,
+      title(entry.action),
+      `${title(entry.recordType)} ${entry.recordId || ""}`,
       auditSummary(entry),
       `<button class="secondary-button" data-audit-detail="${entry.id}"><i data-lucide="eye"></i>View</button>`,
     ]);
+    const actionOptions = auditOptions(allEntries, "action");
+    const moduleOptions = auditOptions(allEntries, "recordType");
     qs("#auditView").innerHTML = `
       <section class="panel">
         <div class="table-head"><div><h2>Audit trail</h2><p>Edits, archives, voids, settings changes, role changes, and financial adjustments are recorded for traceability.</p></div></div>
-        <div class="list-toolbar"><input data-table-search="auditTable" placeholder="Search audit log by user, action, module, record, or reason"></div>
+        <div class="audit-stats">
+          ${metric("Audit entries", allEntries.length, false)}
+          ${metric("Filtered results", entries.length, false)}
+          ${metric("Settings changes", allEntries.filter((entry) => entry.recordType === "settings").length, false)}
+          ${metric("Voids / archives", allEntries.filter((entry) => ["voided", "archived", "restore"].includes(entry.action)).length, false)}
+        </div>
+        <div class="list-toolbar audit-toolbar">
+          <input data-table-search="auditTable" placeholder="Search audit log by user, action, module, record, or reason">
+          <select data-audit-filter="action"><option value="">All actions</option>${actionOptions.map((action) => `<option value="${esc(action)}" ${auditFilters.action === action ? "selected" : ""}>${esc(title(action))}</option>`).join("")}</select>
+          <select data-audit-filter="module"><option value="">All modules</option>${moduleOptions.map((module) => `<option value="${esc(module)}" ${auditFilters.module === module ? "selected" : ""}>${esc(title(module))}</option>`).join("")}</select>
+          <input type="date" data-audit-filter="fromDate" value="${esc(auditFilters.fromDate)}" aria-label="Audit from date">
+          <input type="date" data-audit-filter="toDate" value="${esc(auditFilters.toDate)}" aria-label="Audit to date">
+          <button class="secondary-button" data-audit-clear><i data-lucide="x"></i>Clear</button>
+        </div>
         ${tableHtml("auditTable", ["Date & time", "User", "Role", "Action", "Record", "Summary", ""], rows)}
       </section>
     `;
   }
 
   function auditSummary(entry) {
-    const before = parseJson(entry.oldValue);
-    const after = parseJson(entry.newValue);
-    if (before && after && typeof before === "object" && typeof after === "object") {
-      const keys = ["amount", "status", "date", "dueDate", "number", "name", "clientId", "supplierId", "projectCode", "taxRate", "discount"];
-      const changes = keys.filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key])).slice(0, 3);
-      if (changes.length) {
-        return changes.map((key) => `${title(key)} changed from ${formatAuditValue(before[key])} to ${formatAuditValue(after[key])}`).join("; ");
-      }
-      if (before.items || after.items || before.lines || after.lines) return "Line items or journal lines changed";
-    }
-    return entry.reason || `${title(entry.action)} recorded`;
+    return summarizeAuditEntry(entry, { moneyFormatter: money });
   }
 
   function parseJson(value) {
-    try {
-      return value ? JSON.parse(value) : null;
-    } catch (error) {
-      return null;
-    }
+    return parseAuditValue(value);
   }
 
   function formatAuditValue(value) {
-    if (typeof value === "number" || (!Number.isNaN(Number(value)) && String(value || "").trim() !== "")) return money.format(Number(value));
-    return value === undefined || value === null || value === "" ? "blank" : String(value);
+    return formatAuditDisplayValue(value, money);
   }
 
   function renderHelp() {
@@ -1258,10 +1273,15 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     save({ action: "create-user", recordType: "user", recordId: user.id, before: null, after: user, reason: "User added from settings" });
   }
 
-  function backupJson() {
+  async function backupJson(reason = "Manual backup downloaded") {
     if (!requirePermission("settings", "settings")) return;
-    downloadBlob(new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }), `cgm-backup-${CGM.today()}.json`);
-    notify("Backup created", "A local JSON backup has been downloaded.", "success");
+    const filename = backupFilename("cgm-backup");
+    const counts = backupCounts(state);
+    const saved = await save({ action: "create-backup", recordType: "backup", recordId: filename, before: null, after: { filename, counts }, reason });
+    if (!saved) return;
+    const envelope = createBackupEnvelope(state, { createdBy: currentUser().name, reason, source: "manual" });
+    downloadBlob(new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" }), filename);
+    notify("Backup created", "A validated local JSON backup has been downloaded.", "success");
   }
 
   function restoreJsonBackup(event) {
@@ -1269,22 +1289,40 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
+      let parsed;
+      try {
+        parsed = parseBackupText(reader.result);
+      } catch (error) {
+        notify("Restore failed", error.message || "The selected file is not a valid Civil-Gineer Masta backup.", "error");
+        event.target.value = "";
+        return;
+      }
+      const metadata = parsed.metadata;
+      const countRows = backupCountRows(metadata.counts);
       openConfirmModal({
         titleText: "Restore local backup",
-        message: "This will overwrite the current app state and sync it to Supabase. Make sure this is the correct backup file.",
+        message: `This will overwrite the current app state and sync it to Supabase. Backup date: ${metadata.createdAt || "legacy file"}. A pre-restore safety backup will download first.`,
         confirmLabel: "Restore backup",
         tone: "danger",
         reasonRequired: true,
         onConfirm: async (reason) => {
           try {
             const before = structuredClone(state);
-            state = { ...state, ...JSON.parse(reader.result) };
-            await save({ action: "restore-backup", recordType: "settings", recordId: "local-json-backup", before, after: state, reason });
+            const safetyFilename = backupFilename("cgm-pre-restore");
+            const safetyEnvelope = createBackupEnvelope(before, { createdBy: currentUser().name, reason: "Automatic pre-restore safety backup", source: "pre-restore" });
+            downloadBlob(new Blob([JSON.stringify(safetyEnvelope, null, 2)], { type: "application/json" }), safetyFilename);
+            state = { ...CGM.initialState(), ...parsed.state };
+            await save({ action: "restore-backup", recordType: "backup", recordId: file.name, before, after: state, reason });
+            notify("Restore complete", "Backup restored and synced. Review dashboards, reports, and audit log before continuing.", "success");
           } catch (error) {
             notify("Restore failed", error.message || "The selected file is not a valid backup.", "error");
+          } finally {
+            event.target.value = "";
           }
         },
       });
+      qs("#confirmActionForm .confirm-panel p").insertAdjacentHTML("afterend", `<div class="backup-restore-preview full">${miniReportTable("Backup contents", countRows, ["Area", "Records"])}${parsed.warnings.length ? `<p class="muted">${esc(parsed.warnings.join(" "))}</p>` : ""}</div>`);
+      event.target.value = "";
     };
     reader.readAsText(file);
   }
@@ -2642,14 +2680,17 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
   function openAuditDetail(id) {
     const entry = (state.auditLog || []).find((item) => item.id === id);
     if (!entry) return;
+    const changes = auditChangeRows(entry, { moneyFormatter: money });
     openModal("Audit detail", `
       ${miniReportTable("Change record", [
         ["Date & time", formatDateTime(entry.at)],
         ["User", `${entry.userName} (${entry.role})`],
-        ["Action", entry.action],
-        ["Record", `${entry.recordType} ${entry.recordId || ""}`],
+        ["Action", title(entry.action)],
+        ["Record", `${title(entry.recordType)} ${entry.recordId || ""}`],
+        ["Summary", auditSummary(entry)],
         ["Reason", entry.reason || ""],
       ])}
+      ${changes.length ? miniReportTable("Readable changes", changes, ["Field", "Change"]) : ""}
       <div class="grid-two audit-detail">
         <section><h3>Old value</h3><pre>${esc(prettyJson(entry.oldValue))}</pre></section>
         <section><h3>New value</h3><pre>${esc(prettyJson(entry.newValue))}</pre></section>
@@ -2742,6 +2783,11 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     if (button.dataset.modalCancel !== undefined) closeModal();
     if (button.dataset.backupJson !== undefined) backupJson();
     if (button.dataset.restoreJson !== undefined) qs("#restoreJsonInput")?.click();
+    if (button.dataset.auditClear !== undefined) {
+      auditFilters = { action: "", module: "", fromDate: "", toDate: "" };
+      renderAudit();
+      if (window.lucide) lucide.createIcons();
+    }
     if (button.dataset.goView) {
       closeModal();
       closeQuickFab();
@@ -2774,6 +2820,15 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     }
     const editor = event.target.closest?.("[data-items-editor]");
     if (editor) updateItemEditor(editor);
+  });
+
+  document.addEventListener("change", (event) => {
+    const filter = event.target.closest("[data-audit-filter]");
+    if (filter) {
+      auditFilters = { ...auditFilters, [filter.dataset.auditFilter]: filter.value };
+      renderAudit();
+      if (window.lucide) lucide.createIcons();
+    }
   });
 
   qs("#modalBackdrop").addEventListener("click", (event) => {

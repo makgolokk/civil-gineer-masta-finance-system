@@ -1447,10 +1447,49 @@ tbody tr:hover {
   display: flex;
   gap: 10px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
-.list-toolbar input {
+.list-toolbar input,
+.list-toolbar select {
   max-width: 520px;
+}
+
+.audit-toolbar input,
+.audit-toolbar select {
+  flex: 1 1 160px;
+}
+
+.audit-stats,
+.backup-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.backup-summary {
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
+  align-items: start;
+}
+
+.safety-note,
+.backup-restore-preview {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fffafa;
+  padding: 14px;
+}
+
+.safety-note strong {
+  display: block;
+  color: var(--black);
+  margin-bottom: 6px;
+}
+
+.safety-note p {
+  margin: 0;
+  color: var(--muted);
 }
 
 .role-pill {
@@ -1532,6 +1571,11 @@ pre {
 
 @media (max-width: 1080px) {
   .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .audit-stats,
+  .backup-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1618,6 +1662,8 @@ pre {
   }
 
   .metrics-grid,
+  .audit-stats,
+  .backup-summary,
   .form-grid,
   .portal-grid,
   .chart-grid,
