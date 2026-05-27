@@ -2,6 +2,9 @@ import { formatDateTime as formatDateTimeValue, formatLongDate as formatLongDate
 import { canRoleAction, canRoleRecordAction } from "./src/modules/permissions.js";
 import { nextOfficialNumber, periodKey, previewPeriodCode, reservePreviewedPeriodCode, syncCounterFromCode } from "./src/modules/numberingService.js";
 import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
+import { accountName as lookupAccountName, clientName as lookupClientName, clientSnapshotFromEntry as buildClientSnapshot, projectLabel as lookupProjectLabel, quotationClientName as lookupQuotationClientName, serviceName as lookupServiceName, supplierName as lookupSupplierName } from "./src/modules/clientProjectUtils.js";
+import { buildDashboardModel, inPeriod as isDateInPeriod, selectedPeriod as resolveSelectedPeriod } from "./src/modules/dashboardUtils.js";
+import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMiniReportTable, tableHtml as renderTableHtml } from "./src/modules/tableUtils.js";
 
 (async function () {
   const money = moneyFormatter;
@@ -181,16 +184,16 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     const status = CGM.statusOf(item, options.fallbackStatus || "active");
     const isInactive = !CGM.isActiveRecord(item);
     const preview = options.document && canRecordAction(typeName, "preview", item)
-      ? `<button class="secondary-button" data-preview-document="${typeName}" data-id="${item.id}"><i data-lucide="eye"></i>Preview</button>`
+      ? rowAction("secondary-button", `data-preview-document="${typeName}" data-id="${item.id}"`, "eye", "Preview")
       : "";
     const download = options.document && canRecordAction(typeName, "export", item)
-      ? `<button class="secondary-button" data-export-document="${typeName}" data-id="${item.id}" data-format="pdf"><i data-lucide="file-down"></i>PDF</button>`
+      ? rowAction("secondary-button", `data-export-document="${typeName}" data-id="${item.id}" data-format="pdf"`, "file-down", "PDF")
       : "";
-    const restore = isInactive && canRecordAction(typeName, "restore", item) ? `<button class="secondary-button" data-record-restore="${typeName}" data-id="${item.id}"><i data-lucide="rotate-ccw"></i>Restore</button>` : "";
+    const restore = isInactive && canRecordAction(typeName, "restore", item) ? rowAction("secondary-button", `data-record-restore="${typeName}" data-id="${item.id}"`, "rotate-ccw", "Restore") : "";
     const voidLabel = ["invoice", "payment", "receipt"].includes(typeName) ? "Void" : "Archive";
-    const voidButton = isInactive || !canRecordAction(typeName, voidLabel.toLowerCase(), item) ? "" : `<button class="danger-button" data-record-void="${typeName}" data-id="${item.id}"><i data-lucide="ban"></i>${voidLabel}</button>`;
-    const duplicate = options.duplicate && canRecordAction(typeName, "create", item) ? `<button class="secondary-button" data-record-duplicate="${typeName}" data-id="${item.id}"><i data-lucide="copy"></i>Duplicate</button>` : "";
-    const edit = canRecordAction(typeName, "edit", item) ? `<button class="secondary-button" data-record-edit="${typeName}" data-id="${item.id}"><i data-lucide="pencil"></i>Edit</button>` : "";
+    const voidButton = isInactive || !canRecordAction(typeName, voidLabel.toLowerCase(), item) ? "" : rowAction("danger-button", `data-record-void="${typeName}" data-id="${item.id}"`, "ban", voidLabel);
+    const duplicate = options.duplicate && canRecordAction(typeName, "create", item) ? rowAction("secondary-button", `data-record-duplicate="${typeName}" data-id="${item.id}"`, "copy", "Duplicate") : "";
+    const edit = canRecordAction(typeName, "edit", item) ? rowAction("secondary-button", `data-record-edit="${typeName}" data-id="${item.id}"`, "pencil", "Edit") : "";
     const history = status === "archived" ? `<span class="muted">Archived</span>` : "";
     return `<div class="row-actions">
       ${edit}
@@ -201,6 +204,10 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
       ${restore}
       ${history}
     </div>`;
+  }
+
+  function rowAction(className, attrs, icon, label) {
+    return `<button class="${className} compact-action" ${attrs} title="${esc(label)}" aria-label="${esc(label)}"><i data-lucide="${icon}"></i><span class="action-text">${esc(label)}</span></button>`;
   }
 
   function setView(view) {
@@ -290,14 +297,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function decorateTables() {
-    qsa(".table-wrap table").forEach((table) => {
-      const headers = qsa("thead th", table).map((header) => header.textContent.trim());
-      qsa("tbody tr", table).forEach((row) => {
-        qsa("td", row).forEach((cell, index) => {
-          cell.dataset.label = headers[index] || "";
-        });
-      });
-    });
+    decorateResponsiveTables(document);
   }
 
   function renderDashboard() {
@@ -641,159 +641,15 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function dashboardModel() {
-    const period = selectedPeriod();
-    const periodInvoices = state.invoices.filter((invoice) => CGM.isPostedInvoice(invoice) && inPeriod(invoice.date, period));
-    const periodPayments = state.payments.filter((payment) => CGM.isActiveRecord(payment) && inPeriod(payment.date, period));
-    const periodExpenses = state.expenses.filter((expense) => CGM.isActiveRecord(expense) && inPeriod(expense.date, period));
-    const periodSupplierPayments = state.supplierPayments.filter((payment) => CGM.isActiveRecord(payment) && inPeriod(payment.date, period));
-    const periodInvoiced = periodInvoices.reduce((sum, invoice) => sum + CGM.documentTotal(invoice), 0);
-    const periodPaymentsTotal = periodPayments.reduce((sum, payment) => sum + CGM.toNumber(payment.amount), 0);
-    const periodExpensesTotal = periodExpenses.reduce((sum, expense) => sum + CGM.toNumber(expense.amount), 0) + periodSupplierPayments.reduce((sum, payment) => sum + CGM.toNumber(payment.amount), 0);
-    const debtors = state.clients.reduce((sum, client) => sum + CGM.clientStatement(state, client.id).balance, 0);
-    const creditors = state.suppliers.reduce((sum, supplier) => sum + CGM.supplierStatement(state, supplier.id).balance, 0);
-    const unpaidInvoices = state.invoices.filter((invoice) => CGM.isPostedInvoice(invoice) && CGM.invoiceStatus(state, invoice) !== "paid");
-    const overdueInvoices = unpaidInvoices.filter((invoice) => invoice.dueDate && invoice.dueDate < CGM.today());
-    const creditorsDue = state.supplierBills.filter((bill) => CGM.isActiveRecord(bill) && CGM.billStatus(state, bill) !== "paid" && (bill.dueDate || bill.date) <= CGM.today());
-    const netProfitLoss = profitForPeriod(period);
-    const bankCashBalance = CGM.cashAccountBalance(state);
-    const model = {
-      period,
-      financialYear: financialYearLabel(period.start),
-      periodInvoiced,
-      periodPayments: periodPaymentsTotal,
-      periodExpenses: periodExpensesTotal,
-      periodNetCash: periodPaymentsTotal - periodExpensesTotal,
-      debtors,
-      creditors,
-      netProfitLoss,
-      bankCashBalance,
-      overdueCount: overdueInvoices.length,
-      overdueAmount: overdueInvoices.reduce((sum, invoice) => sum + CGM.documentTotal(invoice) - CGM.invoicePaid(state, invoice.id), 0),
-      unpaidAmount: unpaidInvoices.reduce((sum, invoice) => sum + CGM.documentTotal(invoice) - CGM.invoicePaid(state, invoice.id), 0),
-      creditorsDueAmount: creditorsDue.reduce((sum, bill) => sum + CGM.toNumber(bill.amount) - CGM.supplierBillPaid(state, bill.id), 0),
-      trends: monthlyTrends(period.end),
-    };
-    model.health = businessHealth(model);
-    model.alerts = dashboardAlerts(model);
-    model.decisionRows = decisionRows(model);
-    return model;
+    return buildDashboardModel({ state, cgm: CGM, filter: dashboardFilter, money, monthName, financialYearLabel });
   }
 
   function selectedPeriod() {
-    if (dashboardFilter.mode === "quarter") {
-      const [year, qText] = dashboardFilter.quarter.split("-Q");
-      const quarter = Number(qText);
-      const month = (quarter - 1) * 3;
-      const start = new Date(Number(year), month, 1);
-      const end = new Date(Number(year), month + 3, 1);
-      return { start, end, label: `Quarter ${quarter}, ${year}` };
-    }
-    if (dashboardFilter.mode === "year") {
-      const year = Number(dashboardFilter.year);
-      return { start: new Date(year, 0, 1), end: new Date(year + 1, 0, 1), label: `Year ${year}` };
-    }
-    const [year, month] = dashboardFilter.month.split("-").map(Number);
-    const start = new Date(year, month - 1, 1);
-    return { start, end: new Date(year, month, 1), label: `${monthName(start)} ${year}` };
+    return resolveSelectedPeriod(dashboardFilter, CGM.today(), monthName);
   }
 
   function inPeriod(dateValue, period) {
-    const date = new Date(`${dateValue}T00:00:00`);
-    return date >= period.start && date < period.end;
-  }
-
-  function profitForPeriod(period) {
-    const entries = CGM.ledgerEntries(state).filter((entry) => inPeriod(entry.date, period));
-    return state.accounts.reduce((sum, account) => {
-      const balance = entries.filter((entry) => entry.accountId === account.id).reduce((total, entry) => total + entry.debit - entry.credit, 0);
-      if (account.type === "Income") return sum - balance;
-      if (account.type === "Expenses" || account.type === "Cost of Sales") return sum - balance;
-      return sum;
-    }, 0);
-  }
-
-  function monthlyTrends(anchorEnd) {
-    const months = [];
-    const anchor = new Date(anchorEnd);
-    anchor.setDate(1);
-    anchor.setMonth(anchor.getMonth() - 11);
-    for (let i = 0; i < 12; i += 1) {
-      const start = new Date(anchor.getFullYear(), anchor.getMonth() + i, 1);
-      const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
-      const period = { start, end };
-      const invoiced = state.invoices.filter((invoice) => CGM.isPostedInvoice(invoice) && inPeriod(invoice.date, period)).reduce((sum, invoice) => sum + CGM.documentTotal(invoice), 0);
-      const payments = state.payments.filter((payment) => CGM.isActiveRecord(payment) && inPeriod(payment.date, period)).reduce((sum, payment) => sum + CGM.toNumber(payment.amount), 0);
-      const expenses = state.expenses.filter((expense) => CGM.isActiveRecord(expense) && inPeriod(expense.date, period)).reduce((sum, expense) => sum + CGM.toNumber(expense.amount), 0);
-      const supplierPayments = state.supplierPayments.filter((payment) => CGM.isActiveRecord(payment) && inPeriod(payment.date, period)).reduce((sum, payment) => sum + CGM.toNumber(payment.amount), 0);
-      months.push({
-        label: `${start.toLocaleString(undefined, { month: "short" })} ${String(start.getFullYear()).slice(2)}`,
-        key: start.toISOString().slice(0, 7),
-        invoiced,
-        payments,
-        expenses: expenses + supplierPayments,
-        netCash: payments - expenses - supplierPayments,
-        profit: profitForPeriod(period),
-        debtors: balanceAt("debtors", end),
-        creditors: balanceAt("creditors", end),
-        cashBalance: cashBalanceAt(end),
-      });
-    }
-    return months;
-  }
-
-  function balanceAt(typeName, endDate) {
-    if (typeName === "debtors") {
-      const invoices = state.invoices.filter((invoice) => CGM.isPostedInvoice(invoice) && new Date(`${invoice.date}T00:00:00`) < endDate).reduce((sum, invoice) => sum + CGM.documentTotal(invoice), 0);
-      const payments = state.payments.filter((payment) => CGM.isActiveRecord(payment) && new Date(`${payment.date}T00:00:00`) < endDate).reduce((sum, payment) => sum + CGM.toNumber(payment.amount), 0);
-      const opening = state.clients.filter(CGM.isActiveRecord).reduce((sum, client) => sum + CGM.toNumber(client.openingBalance), 0);
-      return opening + invoices - payments;
-    }
-    const bills = state.supplierBills.filter((bill) => CGM.isActiveRecord(bill) && new Date(`${bill.date}T00:00:00`) < endDate).reduce((sum, bill) => sum + CGM.toNumber(bill.amount), 0);
-    const payments = state.supplierPayments.filter((payment) => CGM.isActiveRecord(payment) && new Date(`${payment.date}T00:00:00`) < endDate).reduce((sum, payment) => sum + CGM.toNumber(payment.amount), 0);
-    const opening = state.suppliers.filter(CGM.isActiveRecord).reduce((sum, supplier) => sum + CGM.toNumber(supplier.openingBalance), 0);
-    return opening + bills - payments;
-  }
-
-  function cashBalanceAt(endDate) {
-    return CGM.ledgerEntries(state)
-      .filter((entry) => CGM.isMoneyAccount(state, entry.accountId) && new Date(`${entry.date}T00:00:00`) < endDate)
-      .reduce((sum, entry) => sum + entry.debit - entry.credit, 0);
-  }
-
-  function businessHealth(model) {
-    let score = 100;
-    if (model.periodNetCash < 0) score -= 25;
-    if (model.overdueAmount > 0) score -= Math.min(25, 10 + (model.overdueAmount / Math.max(model.periodInvoiced, 1)) * 20);
-    if (model.periodExpenses > model.periodInvoiced && model.periodInvoiced > 0) score -= 20;
-    if (model.netProfitLoss < 0) score -= 20;
-    if (model.unpaidAmount > model.periodPayments && model.unpaidAmount > 0) score -= 15;
-    score = Math.max(0, Math.round(score));
-    const status = score >= 85 ? "Excellent" : score >= 65 ? "Good" : score >= 40 ? "Watch" : "Critical";
-    return { score, status, tone: status.toLowerCase() };
-  }
-
-  function dashboardAlerts(model) {
-    const alerts = [];
-    if (model.periodPayments > model.periodExpenses) alerts.push({ level: "good", title: "Good month", message: "Cash received is higher than expenses for the selected period." });
-    if (model.overdueCount > 0) alerts.push({ level: "warning", title: "Action needed", message: `${model.overdueCount} overdue invoice(s) are affecting cash flow.` });
-    if (model.debtors > 0) alerts.push({ level: "warning", title: "Unpaid client balances", message: `${money.format(model.debtors)} is still outstanding from clients.` });
-    if (model.periodExpenses > model.periodInvoiced * 0.75 && model.periodInvoiced > 0) alerts.push({ level: "warning", title: "Expense pressure", message: "Warning: expenses are rising faster than income in this period." });
-    if (model.bankCashBalance < Math.max(1000, model.periodExpenses * 0.25)) alerts.push({ level: "danger", title: "Low cash buffer", message: "Combined bank and cash balance is low compared with current expense activity." });
-    if (model.creditorsDueAmount > 0) alerts.push({ level: "warning", title: "Creditors due", message: `${money.format(model.creditorsDueAmount)} is due to suppliers or creditors.` });
-    if (model.periodNetCash < 0) alerts.push({ level: "danger", title: "Negative net cash", message: "Cash outflows are higher than cash inflows for this period." });
-    if (model.unpaidAmount > 0) alerts.push({ level: "warning", title: "Missing payments", message: "Issued invoices still have unpaid balances. Follow up before new work starts." });
-    if (!alerts.length) alerts.push({ level: "good", title: "Stable position", message: "No major cash, debtor, creditor, or expense alerts for this period." });
-    return alerts;
-  }
-
-  function decisionRows(model) {
-    const improving = model.periodPayments >= model.periodExpenses ? "Cash collection is covering current outflows." : "Cash collection is not yet covering current outflows.";
-    const risky = model.overdueAmount > 0 ? `Overdue debtors total ${money.format(model.overdueAmount)}.` : "No overdue debtor pressure is visible.";
-    const attention = model.creditorsDueAmount > 0 ? `Schedule creditor payments of ${money.format(model.creditorsDueAmount)}.` : "Keep supplier accounts current and monitor new bills.";
-    const action = model.health.status === "Critical" || model.health.status === "Watch"
-      ? "Prioritize collections, pause non-essential spending, and review supplier payment timing."
-      : "Maintain collection discipline and use the positive cash position for planned project delivery.";
-    return [["Improving", improving], ["Risky", risky], ["Needs attention", attention], ["Suggested management action", action]];
+    return isDateInPeriod(dateValue, period);
   }
 
   function healthBadge(health) {
@@ -1284,7 +1140,7 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
     ];
     qs("#helpView").innerHTML = `<section class="panel">
       <div class="table-head"><div><h2>Help and user guide</h2><p>Plain-language guidance for daily Civil-Gineer Masta business operations.</p></div></div>
-      <div class="help-grid">${guides.map(([heading, text]) => `<article class="help-card"><i data-lucide="info"></i><h3>${esc(heading)}</h3><p>${esc(text)}</p></article>`).join("")}</div>
+      <div class="help-grid">${guides.map(([heading, text], index) => `<details class="help-card" ${index === 0 ? "open" : ""}><summary><i data-lucide="info"></i><span>${esc(heading)}</span></summary><p>${esc(text)}</p></details>`).join("")}</div>
     </section>
     <section class="panel">
       <div class="table-head"><div><h2>FAQ</h2><p>Quick answers for common office questions.</p></div></div>
@@ -1310,11 +1166,11 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function tableHtml(id, headers, rows) {
-    return `<div class="table-wrap"><table id="${esc(id)}"><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${(rows.length ? rows : [["No records yet", ...headers.slice(1).map(() => "")]]).map((row) => `<tr>${row.map((cell) => `<td>${String(cell).startsWith("<button") || String(cell).startsWith("<div") ? cell : esc(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    return renderTableHtml({ id, headers, rows, escapeHtml: esc });
   }
 
   function miniReportTable(caption, rows, headers = ["Metric", "Value"]) {
-    return `${caption ? `<h3>${esc(caption)}</h3>` : ""}<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${(rows.length ? rows : [["No records yet", ""]]).map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    return renderMiniReportTable({ caption, rows, headers, escapeHtml: esc });
   }
 
   function documentPreview(doc) {
@@ -1986,17 +1842,11 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function clientSnapshotFromEntry(data) {
-    return {
-      name: data.clientName,
-      contact: data.contact || "",
-      email: data.email || "",
-      phone: data.phone || "",
-      address: data.address || "",
-    };
+    return buildClientSnapshot(data);
   }
 
   function quotationClientName(quote) {
-    return state.clients.find((client) => client.id === quote.clientId)?.name || quote.clientSnapshot?.name || "Unlinked prospect";
+    return lookupQuotationClientName(state, quote);
   }
 
   function openInvoiceOptions() {
@@ -2276,38 +2126,31 @@ import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
   }
 
   function formatDateTime(value) {
-    if (!value) return "";
-    return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    return formatDateTimeValue(value);
   }
 
   function filterTable(tableId, query) {
-    const table = qs(`#${CSS.escape(tableId)}`);
-    if (!table) return;
-    const needle = String(query || "").toLowerCase();
-    qsa("tbody tr", table).forEach((row) => {
-      row.hidden = needle && !row.textContent.toLowerCase().includes(needle);
-    });
+    filterTableRows(document, tableId, query);
   }
 
   function clientName(id) {
-    return state.clients.find((client) => client.id === id)?.name || "";
+    return lookupClientName(state, id);
   }
 
   function accountName(id) {
-    return state.accounts.find((account) => account.id === id)?.name || id;
+    return lookupAccountName(state, id) || id;
   }
 
   function supplierName(id) {
-    return state.suppliers.find((supplier) => supplier.id === id)?.name || "";
+    return lookupSupplierName(state, id);
   }
 
   function serviceName(id) {
-    return state.services.find((service) => service.id === id)?.name || "Unassigned";
+    return lookupServiceName(state, id);
   }
 
   function projectLabel(projectId, fallback = "") {
-    const project = state.projects.find((item) => item.id === projectId);
-    return project ? `${project.code} - ${project.name}` : fallback || "Unassigned";
+    return lookupProjectLabel(state, projectId, fallback);
   }
 
   function suggestedProjectCode() {
