@@ -1,3 +1,6 @@
+import { clientCodeFromNumber, nextPeriodCode, previewPeriodCode, reservePreviewedPeriodCode, syncCounterFromCode } from "./src/modules/numberingService.js";
+import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
+
 (async function () {
   const money = new Intl.NumberFormat("en-BW", { style: "currency", currency: "BWP" });
   const qs = (selector, scope = document) => scope.querySelector(selector);
@@ -1457,7 +1460,7 @@
     if (!requirePermission("client", "create")) return;
     const data = Object.fromEntries(new FormData(event.currentTarget));
     const number = CGM.nextNumber(state, "client", "C");
-    const client = { ...data, id: CGM.uid(), number, code: data.code || clientCodeFromNumber(number), openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
+    const client = { ...data, id: CGM.uid(), number, code: data.code || clientCodeFromNumber(number, CGM.today()), openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
     state.clients.unshift(client);
     save({ action: "create", recordType: "client", recordId: client.number, before: null, after: client });
   }
@@ -1499,7 +1502,7 @@
       return;
     }
     const serviceId = items[0]?.serviceId || data.serviceId;
-    const project = findOrCreateProject({ clientId: data.clientId, serviceId, projectCode: data.projectCode, projectName: data.projectName });
+    const project = findOrCreateProject({ clientId: data.clientId, serviceId, projectCode: reserveProjectCode(data.projectCode), projectName: data.projectName });
     const service = CGM.serviceById(state, serviceId);
     const invoice = { id: CGM.uid(), number: CGM.nextNumber(state, "invoice", docPrefix("invoicePrefix", "INV")), clientId: data.clientId, date: data.date, dueDate: data.dueDate, serviceId, projectId: project?.id || "", projectCode: project?.code || "", incomeAccountId: service?.incomeAccountId || "sales_income", notes: data.notes, items, discount: defaultDiscount(), taxRate: defaultTaxRate(), status: "issued" };
     state.invoices.unshift(invoice);
@@ -1563,7 +1566,7 @@
       date: data.date,
       validUntil: data.validUntil,
       serviceId: items[0]?.serviceId || data.serviceId,
-      projectCode: data.projectCode,
+      projectCode: reserveProjectCode(data.projectCode),
       projectName: data.projectName,
       status: "draft",
       notes: data.notes,
@@ -1589,7 +1592,7 @@
     }
     const client = findOrCreateClient(clientSnapshotFromEntry(data));
     const serviceId = items[0]?.serviceId || data.serviceId;
-    const project = findOrCreateProject({ clientId: client.id, serviceId, projectCode: data.projectCode, projectName: data.projectName });
+    const project = findOrCreateProject({ clientId: client.id, serviceId, projectCode: reserveProjectCode(data.projectCode), projectName: data.projectName });
     const service = CGM.serviceById(state, serviceId);
     const invoice = {
       id: CGM.uid(),
@@ -1829,7 +1832,7 @@
     const client = {
       id: CGM.uid(),
       number,
-      code: snapshot.code || clientCodeFromNumber(number),
+      code: snapshot.code || clientCodeFromNumber(number, CGM.today()),
       name: cleanName || "New client",
       contact: snapshot.contact || "",
       email: snapshot.email || "",
@@ -1850,13 +1853,14 @@
     if (!cleanCode && !projectName) return null;
     const project = {
       id: CGM.uid(),
-      code: cleanCode || CGM.nextNumber(state, "project", "PRJ"),
+      code: cleanCode || nextPeriodCode(state, "project", "PRJ", CGM.today()),
       name: projectName || cleanCode || "Unnamed project",
       clientId: clientId || "",
       serviceId: serviceId || "",
       status: "active",
       createdAt: CGM.today(),
     };
+    syncCounterFromCode(state, "project", project.code);
     state.projects.unshift(project);
     return project;
   }
@@ -2009,7 +2013,9 @@
 
   async function fetchExportBlob(format, payload) {
     try {
-      const response = await fetch(`http://127.0.0.1:8765/api/export/${format === "excel" ? "excel" : "pdf"}`, {
+      const baseUrl = exportApiBaseUrl();
+      if (!baseUrl) throw new Error("Production export API is not configured");
+      const response = await fetch(`${baseUrl}/api/export/${format === "excel" ? "excel" : "pdf"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -2018,7 +2024,7 @@
       return await response.blob();
     } catch (error) {
       console.info("Export backend unavailable:", error.message);
-      notify("Export backend unavailable", "Using browser fallback where possible. Start the Python export service for professional PDF/Excel output.", "warning");
+      notify("Export backend unavailable", "Using browser fallback where possible. Configure the production export API for professional PDF/Excel output.", "warning");
       return null;
     }
   }
@@ -2210,20 +2216,15 @@
   }
 
   function suggestedProjectCode() {
-    return previewNumber("project", "PRJ");
+    return previewPeriodCode(state, "project", "PRJ", CGM.today());
   }
 
   function suggestedClientCode() {
-    return previewNumber("client", "CL");
+    return previewPeriodCode(state, "client", "CL", CGM.today());
   }
 
-  function previewNumber(key, prefix) {
-    return `${prefix}-${String((state.counters[key] || 1)).padStart(4, "0")}`;
-  }
-
-  function clientCodeFromNumber(number) {
-    const digits = String(number || "").match(/\d+$/)?.[0] || String(state.counters.client || 1);
-    return `CL-${digits.padStart(4, "0")}`;
+  function reserveProjectCode(code) {
+    return reservePreviewedPeriodCode(state, "project", "PRJ", code, CGM.today());
   }
 
   function docPrefix(key, fallback) {

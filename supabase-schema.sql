@@ -27,6 +27,7 @@ create table if not exists public.clients (
   id uuid primary key default gen_random_uuid(),
   owner_user_id uuid null references public.users(id) on delete set null,
   name text not null,
+  code text,
   email text,
   phone text,
   status text not null default 'active',
@@ -172,6 +173,43 @@ create table if not exists public.company_settings (
   updated_at timestamptz not null default now()
 );
 
+alter table public.clients add column if not exists code text;
+
+create table if not exists public.app_sequences (
+  sequence_key text not null,
+  period_key text not null default '',
+  next_value bigint not null default 1,
+  updated_at timestamptz not null default now(),
+  primary key (sequence_key, period_key)
+);
+
+create or replace function public.next_app_number(
+  p_sequence_key text,
+  p_prefix text,
+  p_period_key text default ''
+)
+returns text
+language plpgsql
+security definer
+as $$
+declare
+  current_value bigint;
+  clean_period text := coalesce(p_period_key, '');
+begin
+  insert into public.app_sequences(sequence_key, period_key, next_value)
+  values (p_sequence_key, clean_period, 2)
+  on conflict (sequence_key, period_key)
+  do update set next_value = public.app_sequences.next_value + 1, updated_at = now()
+  returning next_value - 1 into current_value;
+
+  if clean_period = '' then
+    return p_prefix || '-' || lpad(current_value::text, 4, '0');
+  end if;
+
+  return p_prefix || '-' || clean_period || '-' || lpad(current_value::text, 4, '0');
+end;
+$$;
+
 create index if not exists idx_projects_client_id on public.projects(client_id);
 create index if not exists idx_quotations_client_id on public.quotations(client_id);
 create index if not exists idx_quotations_project_id on public.quotations(project_id);
@@ -182,6 +220,12 @@ create index if not exists idx_payments_invoice_id on public.payments(invoice_id
 create index if not exists idx_payments_client_id on public.payments(client_id);
 create index if not exists idx_expenses_project_id on public.expenses(project_id);
 create index if not exists idx_supplier_bills_supplier_id on public.supplier_bills(supplier_id);
+create unique index if not exists idx_clients_code_unique on public.clients(code) where code is not null and code <> '';
+create unique index if not exists idx_projects_code_unique on public.projects(code) where code is not null and code <> '';
+create unique index if not exists idx_quotations_number_unique on public.quotations(number);
+create unique index if not exists idx_invoices_number_unique on public.invoices(number);
+create unique index if not exists idx_payments_receipt_number_unique on public.payments(receipt_number) where receipt_number is not null and receipt_number <> '';
+create unique index if not exists idx_supplier_bills_number_unique on public.supplier_bills(number);
 
 drop trigger if exists set_users_updated_at on public.users;
 create trigger set_users_updated_at before update on public.users for each row execute function public.set_updated_at();
@@ -218,6 +262,7 @@ alter table public.journal_entries enable row level security;
 alter table public.cash_transactions enable row level security;
 alter table public.audit_log enable row level security;
 alter table public.company_settings enable row level security;
+alter table public.app_sequences enable row level security;
 
 drop policy if exists "temporary anonymous development access to users" on public.users;
 create policy "temporary anonymous development access to users" on public.users for all using (true) with check (true);
@@ -247,3 +292,5 @@ drop policy if exists "temporary anonymous development access to audit_log" on p
 create policy "temporary anonymous development access to audit_log" on public.audit_log for all using (true) with check (true);
 drop policy if exists "temporary anonymous development access to company_settings" on public.company_settings;
 create policy "temporary anonymous development access to company_settings" on public.company_settings for all using (true) with check (true);
+drop policy if exists "temporary anonymous development access to app_sequences" on public.app_sequences;
+create policy "temporary anonymous development access to app_sequences" on public.app_sequences for all using (true) with check (true);

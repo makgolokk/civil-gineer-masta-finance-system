@@ -43,7 +43,17 @@ function tablePayload(collection, record) {
     updated_at: new Date().toISOString(),
   };
 
-  if (collection === "clients" || collection === "users" || collection === "suppliers") {
+  if (collection === "clients") {
+    return {
+      ...common,
+      code: record.code || "",
+      name: record.name || "",
+      email: record.email || "",
+      phone: record.phone || "",
+    };
+  }
+
+  if (collection === "users" || collection === "suppliers") {
     return {
       ...common,
       name: record.name || "",
@@ -169,6 +179,16 @@ export const databaseService = {
     if (!table) throw new Error(`Unknown collection: ${collection}`);
     const { error } = await supabase.from(table).delete().eq("id", id);
     if (error) throw error;
+  },
+
+  async nextNumber(sequenceKey, prefix, periodKey = "") {
+    const { data, error } = await supabase.rpc("next_app_number", {
+      p_sequence_key: sequenceKey,
+      p_prefix: prefix,
+      p_period_key: periodKey,
+    });
+    if (error) throw error;
+    return data;
   },
 
   async loadState(defaultState) {

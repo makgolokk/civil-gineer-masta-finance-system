@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from html import escape
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,8 +27,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-HOST = "127.0.0.1"
-PORT = 8765
+HOST = os.getenv("HOST", "127.0.0.1")
+PORT = int(os.getenv("PORT", "8765"))
 CURRENCY = "BWP"
 
 COMPANY = {
@@ -286,8 +287,9 @@ def brand_header(title, number, styles, data=None):
     except Exception:
         logo = rich(f"<b>{escape(company['name'])}</b>", styles["Normal"])
     title_block = [
-        rich(f"<font size='24' color='#{RED}'><b>{escape(title.upper())}</b></font>", styles["Normal"]),
-        rich(f"<font color='#{MUTED}'>No. {escape(str(number or 'Draft'))}</font>", styles["DocNumber"]),
+        rich(f"<font size='7' color='#{MUTED}'><b>CLIENT DOCUMENT</b></font>", styles["DocNumber"]),
+        rich(f"<font size='26' color='#{RED}'><b>{escape(title.upper())}</b></font>", styles["Normal"]),
+        rich(f"<font color='#{BLACK}'><b>No. {escape(str(number or 'Draft'))}</b></font>", styles["DocNumber"]),
     ]
     contact = f"{company['address']}<br/>{company['phone']}<br/>{company['email']}"
     return Table(
@@ -301,7 +303,7 @@ def brand_header(title, number, styles, data=None):
         colWidths=[50 * mm, 82 * mm, 38 * mm],
         style=[
             ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-            ("LINEBELOW", (0, 0), (-1, -1), 2, colors.HexColor(f"#{RED}")),
+            ("LINEBELOW", (0, 0), (-1, -1), 2.2, colors.HexColor(f"#{RED}")),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (2, 0), (2, 0), "RIGHT"),
             ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -365,19 +367,27 @@ def document_message(kind, document, client, project):
     )
 
 
-def document_intro(kind, document, client, project, styles):
+def document_intro(kind, document, client, project, styles, data=None):
     message = document_message(kind, document, client, project)
+    total_label = "Balance Due" if kind == "invoice" else "Proposal Value"
+    action_label = "Payment requested" if kind == "invoice" else "Prepared for review"
+    amount = max(0, document_total(document) - (invoice_paid(data or {}, document.get("id")) if kind == "invoice" else 0))
     return Table(
-        [[rich(f"<b>{escape(message)}</b>", styles["Normal"])]],
-        colWidths=[170 * mm],
+        [[
+            rich(f"<font color='#{RED}'><b>{escape(action_label.upper())}</b></font><br/><b>{escape(message)}</b>", styles["Normal"]),
+            rich(f"<font size='7' color='#{MUTED}'>{escape(total_label.upper())}</font><br/><font size='18' color='#{RED}'><b>{money(amount)}</b></font>", styles["Normal"]),
+        ]],
+        colWidths=[112 * mm, 58 * mm],
         style=[
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF7F7")),
-            ("LINELEFT", (0, 0), (0, 0), 3, colors.HexColor(f"#{RED}")),
+            ("LINELEFT", (0, 0), (0, 0), 3.5, colors.HexColor(f"#{RED}")),
             ("BOX", (0, 0), (-1, -1), 0.35, colors.HexColor("#F4C9CC")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (1, 0), (1, 0), "RIGHT"),
             ("LEFTPADDING", (0, 0), (-1, -1), 12),
             ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 9),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
         ],
     )
 
@@ -526,7 +536,7 @@ def build_document_pdf(data, kind, document):
     story = [
         brand_header(kind.title(), document.get("number", ""), styles, data),
         Spacer(1, 5 * mm),
-        document_intro(kind, document, client, project, styles),
+        document_intro(kind, document, client, project, styles, data),
         Spacer(1, 7 * mm),
         Table(
             [[
