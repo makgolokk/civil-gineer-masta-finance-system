@@ -549,7 +549,7 @@
             ${input("phone", "Phone")}
             ${input("date", "Quotation date", "date", true, CGM.today())}
             ${input("validUntil", "Valid until", "date", true, CGM.today())}
-            ${input("projectCode", "Project code", "text", false, suggestedProjectCode())}
+            ${generatedInput("projectCode", "Project code", suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("bookQuoteItems", "Quotation items")}
             <label class="field full">Address<textarea name="address"></textarea></label>
@@ -565,7 +565,7 @@
             ${input("phone", "Client phone")}
             ${input("date", "Invoice date", "date", true, CGM.today())}
             ${input("dueDate", "Due date", "date", true, CGM.today())}
-            ${input("projectCode", "Project code", "text", false, suggestedProjectCode())}
+            ${generatedInput("projectCode", "Project code", suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("bookInvoiceItems", "Invoice items")}
             <label class="field full">Address<textarea name="address"></textarea></label>
@@ -921,7 +921,7 @@
           <div class="section-head"><div><h2>Create client record</h2><p>Clients are the customer master records. Their balances roll up to the Debtors Control account.</p></div></div>
           <form id="clientForm" class="form-grid">
             ${input("name", "Client name", "text", true)}
-            ${input("code", "Client code")}
+            ${generatedInput("code", "Client code", suggestedClientCode())}
             ${input("contact", "Contact person")}
             ${input("email", "Email", "email")}
             ${input("phone", "Phone")}
@@ -992,7 +992,7 @@
             <label class="field full">Client<select name="clientId" required>${clientOptions()}</select></label>
             ${input("date", "Invoice date", "date", true, CGM.today())}
             ${input("dueDate", "Due date", "date", true, CGM.today())}
-            ${input("projectCode", "Project code", "text", false, suggestedProjectCode())}
+            ${generatedInput("projectCode", "Project code", suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("invoiceItems", "Invoice items")}
             <label class="field full">Notes<textarea name="notes"></textarea></label>
@@ -1456,7 +1456,8 @@
     event.preventDefault();
     if (!requirePermission("client", "create")) return;
     const data = Object.fromEntries(new FormData(event.currentTarget));
-    const client = { ...data, id: CGM.uid(), number: CGM.nextNumber(state, "client", "C"), code: data.code || "", openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
+    const number = CGM.nextNumber(state, "client", "C");
+    const client = { ...data, id: CGM.uid(), number, code: data.code || clientCodeFromNumber(number), openingBalance: CGM.toNumber(data.openingBalance), createdAt: CGM.today(), status: "active" };
     state.clients.unshift(client);
     save({ action: "create", recordType: "client", recordId: client.number, before: null, after: client });
   }
@@ -1824,10 +1825,11 @@
       return sameEmail || sameName;
     });
     if (existing) return existing;
+    const number = CGM.nextNumber(state, "client", "C");
     const client = {
       id: CGM.uid(),
-      number: CGM.nextNumber(state, "client", "C"),
-      code: snapshot.code || "",
+      number,
+      code: snapshot.code || clientCodeFromNumber(number),
       name: cleanName || "New client",
       contact: snapshot.contact || "",
       email: snapshot.email || "",
@@ -2156,6 +2158,10 @@
     return `<label class="field">${label}<input name="${name}" type="${type}" ${required ? "required" : ""} ${step ? `step="${step}"` : ""} value="${esc(value)}"></label>`;
   }
 
+  function generatedInput(name, label, value) {
+    return `<label class="field generated-field">${label}<input name="${name}" type="text" value="${esc(value)}" readonly><span>Auto-generated</span></label>`;
+  }
+
   function badge(status) {
     const normalized = String(status || "active").toLowerCase().trim().replace(/\s+/g, "-");
     return `<span class="status ${normalized}">${title(normalized)}</span>`;
@@ -2204,7 +2210,20 @@
   }
 
   function suggestedProjectCode() {
-    return `PRJ-${String((state.counters.project || 1)).padStart(4, "0")}`;
+    return previewNumber("project", "PRJ");
+  }
+
+  function suggestedClientCode() {
+    return previewNumber("client", "CL");
+  }
+
+  function previewNumber(key, prefix) {
+    return `${prefix}-${String((state.counters[key] || 1)).padStart(4, "0")}`;
+  }
+
+  function clientCodeFromNumber(number) {
+    const digits = String(number || "").match(/\d+$/)?.[0] || String(state.counters.client || 1);
+    return `CL-${digits.padStart(4, "0")}`;
   }
 
   function docPrefix(key, fallback) {

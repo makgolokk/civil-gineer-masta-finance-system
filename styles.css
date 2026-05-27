@@ -667,6 +667,17 @@ textarea {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
+input[readonly] {
+  background: #f8fafc;
+  color: #4b5563;
+}
+
+.generated-field span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
 textarea {
   min-height: 82px;
   resize: vertical;
