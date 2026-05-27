@@ -1,7 +1,7 @@
 import { formatDateTime as formatDateTimeValue, formatLongDate as formatLongDateValue, formatMonthName, moneyFormatter } from "./src/modules/formatters.js";
 import { canRoleAction, canRoleRecordAction } from "./src/modules/permissions.js";
 import { nextOfficialNumber, periodKey, previewPeriodCode, reservePreviewedPeriodCode, syncCounterFromCode } from "./src/modules/numberingService.js";
-import { exportApiBaseUrl } from "./src/modules/exportConfig.js";
+import { exportClientStatementPdf, exportInvoicePdf, exportQuotationPdf, exportReceiptPdf } from "./src/modules/exportBackendService.js";
 import { accountName as lookupAccountName, clientName as lookupClientName, clientSnapshotFromEntry as buildClientSnapshot, projectLabel as lookupProjectLabel, quotationClientName as lookupQuotationClientName, serviceName as lookupServiceName, supplierName as lookupSupplierName } from "./src/modules/clientProjectUtils.js";
 import { buildDashboardModel, inPeriod as isDateInPeriod, selectedPeriod as resolveSelectedPeriod } from "./src/modules/dashboardUtils.js";
 import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMiniReportTable, tableHtml as renderTableHtml } from "./src/modules/tableUtils.js";
@@ -1897,9 +1897,9 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
 
   async function exportReport(key, format, statementType = "", statementId = "") {
     const report = getReport(key, statementType, statementId);
-    const backendOk = statementType && format === "pdf"
-      ? await exportViaBackend(format, report, { kind: "statement", statementType, id: statementId })
-      : await exportViaBackend(format, report);
+    const backendOk = statementType === "client" && format === "pdf"
+      ? await exportProfessionalPdf("client-statement", statementId, `${report.title}.pdf`)
+      : false;
     if (backendOk) return;
     if (format === "excel") downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
     else downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
@@ -1910,8 +1910,8 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     const report = getDocumentReport(typeName, id);
     if (!report) return;
     const backendOk = format === "pdf" && ["quotation", "invoice", "receipt", "payment"].includes(typeName)
-      ? await exportViaBackend(format, report, { kind: typeName === "payment" ? "receipt" : typeName, id })
-      : await exportViaBackend(format, report);
+      ? await exportProfessionalPdf(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`)
+      : false;
     if (backendOk) return;
     if (format === "excel") downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
     else downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
@@ -1921,10 +1921,9 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     if (!requirePermission(typeName, "preview")) return;
     const report = getDocumentReport(typeName, id);
     if (!report) return;
-    const payload = ["quotation", "invoice", "receipt", "payment"].includes(typeName)
-      ? { kind: typeName === "payment" ? "receipt" : typeName, id, filename: `${report.title}.pdf`, data: state }
-      : { kind: "generic-report", filename: `${report.title}.pdf`, report, data: state };
-    const blob = await fetchExportBlob("pdf", payload);
+    const blob = ["quotation", "invoice", "receipt", "payment"].includes(typeName)
+      ? await getProfessionalPdfBlob(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`)
+      : null;
     if (!blob) {
       downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
       return;
@@ -1937,41 +1936,82 @@ import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMin
     qs("#modalBackdrop").dataset.previewUrl = url;
   }
 
-  async function exportViaBackend(format, report, overrides = {}) {
+  async function exportProfessionalPdf(kind, id, filename) {
+    const blob = await getProfessionalPdfBlob(kind, id, filename);
+    if (!blob) return false;
+    downloadBlob(blob, filename);
+    notify("Professional PDF ready", "Generated through the Civil-Gineer Masta export backend.", "success");
+    return true;
+  }
+
+  async function getProfessionalPdfBlob(kind, id, filename) {
     try {
-      const payload = {
-        kind: "generic-report",
-        filename: `${report.title}.${format === "excel" ? "xlsx" : "pdf"}`,
-        report,
-        data: state,
-        ...overrides,
-      };
-      const blob = await fetchExportBlob(format, payload);
-      if (!blob) return false;
-      downloadBlob(blob, payload.filename || `${report.title}.${format === "excel" ? "xlsx" : "pdf"}`);
-      return true;
+      const payload = buildProfessionalExportPayload(kind, id, filename);
+      if (!payload) return null;
+      if (kind === "quotation") return await exportQuotationPdf(payload);
+      if (kind === "invoice") return await exportInvoicePdf(payload);
+      if (kind === "receipt") return await exportReceiptPdf(payload);
+      if (kind === "client-statement") return await exportClientStatementPdf(payload);
+      return null;
     } catch (error) {
-      console.info("Using browser report export fallback:", error.message);
-      return false;
+      console.info("Export backend unavailable:", error.message);
+      notify("Using fallback export", "The professional export backend is unavailable, so the app will use the browser PDF export for now.", "warning");
+      return null;
     }
   }
 
-  async function fetchExportBlob(format, payload) {
-    try {
-      const baseUrl = exportApiBaseUrl();
-      if (!baseUrl) throw new Error("Production export API is not configured");
-      const response = await fetch(`${baseUrl}/api/export/${format === "excel" ? "excel" : "pdf"}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(`Backend returned ${response.status}`);
-      return await response.blob();
-    } catch (error) {
-      console.info("Export backend unavailable:", error.message);
-      notify("Export backend unavailable", "Using browser fallback where possible. Configure the production export API for professional PDF/Excel output.", "warning");
-      return null;
+  function buildProfessionalExportPayload(kind, id, filename) {
+    const context = exportContext();
+    if (kind === "quotation") {
+      const document = state.quotations.find((item) => item.id === id);
+      return document ? { document, context, filename } : null;
     }
+    if (kind === "invoice") {
+      const invoice = state.invoices.find((item) => item.id === id);
+      return invoice ? { document: { ...invoice, amountPaid: CGM.invoicePaid(state, invoice.id) }, context, filename } : null;
+    }
+    if (kind === "receipt") {
+      const receipt = state.payments.find((item) => item.id === id);
+      return receipt ? { receipt, context, filename } : null;
+    }
+    if (kind === "client-statement") {
+      const statement = CGM.clientStatement(state, id);
+      if (!statement?.client) return null;
+      return {
+        statement: {
+          client: statement.client,
+          rows: statement.rows,
+          balance: statement.balance,
+          openingBalance: statement.openingBalance || statement.client.openingBalance || 0,
+          fromDate: "",
+          toDate: CGM.today(),
+          statementNumber: `${docPrefix("statementPrefix", "ST")}-${String((state.counters?.statement || 1)).padStart(4, "0")}`,
+        },
+        context,
+        filename,
+      };
+    }
+    return null;
+  }
+
+  function exportContext() {
+    const currentSettings = settings();
+    return {
+      settings: {
+        companyProfile: currentSettings.companyProfile,
+        documentSettings: {
+          currency: currentSettings.documentSettings.currency || "BWP",
+          vatEnabled: !!currentSettings.documentSettings.vatEnabled,
+          vatRate: CGM.toNumber(currentSettings.documentSettings.vatRate),
+          defaultDiscount: CGM.toNumber(currentSettings.documentSettings.defaultDiscount),
+        },
+      },
+      clients: activeItems(state.clients, true),
+      projects: activeItems(state.projects, true),
+      services: state.services || [],
+      invoices: activeItems(state.invoices, true).map((invoice) => ({ ...invoice, amountPaid: CGM.invoicePaid(state, invoice.id) })),
+      payments: activeItems(state.payments, true),
+    };
   }
 
   function getReport(key, statementType, statementId) {

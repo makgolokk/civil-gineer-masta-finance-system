@@ -1,17 +1,26 @@
 import { exportApiBaseUrl } from "./exportConfig.js";
 
-async function postPdf(path, payload) {
+const DEFAULT_TIMEOUT_MS = 45000;
+
+async function postPdf(path, payload, options = {}) {
   const baseUrl = exportApiBaseUrl();
   if (!baseUrl) throw new Error("Export backend URL is not configured.");
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error(`Export backend failed with HTTP ${response.status}`);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Export backend failed with HTTP ${response.status}`);
+    }
+    return await response.blob();
+  } finally {
+    window.clearTimeout(timeout);
   }
-  return await response.blob();
 }
 
 export function exportQuotationPdf(payload) {
