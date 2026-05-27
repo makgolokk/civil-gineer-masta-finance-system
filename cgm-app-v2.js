@@ -541,7 +541,7 @@
       </section>
       <div class="grid-two">
         <section class="panel">
-          <div class="section-head"><div><h2>Create quotation</h2><p>Pick the client, choose the service, add the work items, then save. The total is calculated for you.</p></div></div>
+          <div class="section-head"><div><h2>Create quotation</h2><p>Pick the client, add the work items, then save. Each item carries its service category and the total is calculated for you.</p></div></div>
           <form id="bookQuoteForm" class="form-grid">
             ${input("clientName", "Client / prospect name", "text", true)}
             ${input("contact", "Contact person")}
@@ -549,7 +549,6 @@
             ${input("phone", "Phone")}
             ${input("date", "Quotation date", "date", true, CGM.today())}
             ${input("validUntil", "Valid until", "date", true, CGM.today())}
-            <label class="field">Service<select name="serviceId">${serviceOptions()}</select></label>
             ${input("projectCode", "Project code", "text", false, suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("bookQuoteItems", "Quotation items")}
@@ -559,14 +558,13 @@
           </form>
         </section>
         <section class="panel">
-          <div class="section-head"><div><h2>Quick invoice</h2><p>Create a client invoice from line items. The service selection posts to the correct income account.</p></div></div>
+          <div class="section-head"><div><h2>Quick invoice</h2><p>Create a client invoice from line items. Service categories on the items post to the correct income account.</p></div></div>
           <form id="bookInvoiceForm" class="form-grid">
             ${input("clientName", "Client name", "text", true)}
             ${input("email", "Client email", "email")}
             ${input("phone", "Client phone")}
             ${input("date", "Invoice date", "date", true, CGM.today())}
             ${input("dueDate", "Due date", "date", true, CGM.today())}
-            <label class="field">Service<select name="serviceId">${serviceOptions()}</select></label>
             ${input("projectCode", "Project code", "text", false, suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("bookInvoiceItems", "Invoice items")}
@@ -590,12 +588,11 @@
           </form>
         </section>
         <section class="panel">
-          <div class="section-head"><div><h2>Record paid expense</h2><p>Add cost lines just like an order slip, then choose the project, service, and payment account.</p></div></div>
+          <div class="section-head"><div><h2>Record paid expense</h2><p>Add cost lines just like an order slip, then choose the project and payment account.</p></div></div>
           <form id="bookExpenseForm" class="form-grid">
             ${input("date", "Date", "date", true, CGM.today())}
             ${input("category", "Category", "text", true)}
             ${input("vendor", "Vendor")}
-            <label class="field">Service<select name="serviceId">${serviceOptions()}</select></label>
             <label class="field">Project<select name="projectId">${projectOptions()}</select></label>
             ${itemEditor("bookExpenseItems", "Expense items")}
             <label class="field">Paid from<select name="bankAccountId">${accountOptions(["Bank accounts", "Cash accounts"])}</select></label>
@@ -639,7 +636,6 @@
           ${input("phone", "Supplier phone")}
           ${input("date", "Bill date", "date", true, CGM.today())}
           ${input("dueDate", "Due date", "date", true, CGM.today())}
-          <label class="field">Service<select name="serviceId">${serviceOptions()}</select></label>
           <label class="field">Project<select name="projectId">${projectOptions()}</select></label>
           <label class="field full">Debit account<select name="accountId">${accountOptions(["Expenses", "Assets", "Cost of Sales"])}</select></label>
           ${itemEditor("bookSupplierBillItems", "Supplier bill items")}
@@ -967,7 +963,6 @@
             <label class="field full">Supplier<select name="supplierId" required>${supplierOptions()}</select></label>
             ${input("date", "Bill date", "date", true, CGM.today())}
             ${input("dueDate", "Due date", "date", false, CGM.today())}
-            <label class="field">Service<select name="serviceId">${serviceOptions()}</select></label>
             <label class="field">Project<select name="projectId">${projectOptions()}</select></label>
             <label class="field">Debit account<select name="accountId">${accountOptions(["Expenses", "Assets", "Cost of Sales"])}</select></label>
             ${itemEditor("supplierBillItems", "Supplier bill items")}
@@ -992,12 +987,11 @@
     qs("#salesView").innerHTML = `
       <div class="grid-two">
         <section class="panel">
-          <div class="section-head"><div><h2>Create invoice</h2><p>Select client and service, then add invoice items. Posting: Debit Debtors Control, Credit Sales/Income.</p></div></div>
+          <div class="section-head"><div><h2>Create invoice</h2><p>Select the client, then add invoice items. Posting: Debit Debtors Control, Credit Sales/Income.</p></div></div>
           <form id="invoiceForm" class="form-grid">
             <label class="field full">Client<select name="clientId" required>${clientOptions()}</select></label>
             ${input("date", "Invoice date", "date", true, CGM.today())}
             ${input("dueDate", "Due date", "date", true, CGM.today())}
-            <label class="field">Service<select name="serviceId">${serviceOptions()}</select></label>
             ${input("projectCode", "Project code", "text", false, suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("invoiceItems", "Invoice items")}
@@ -1503,8 +1497,8 @@
       openModal("Invoice not saved", "<p>Add at least one invoice item with description, quantity, and rate.</p>");
       return;
     }
-    const project = findOrCreateProject({ clientId: data.clientId, serviceId: data.serviceId, projectCode: data.projectCode, projectName: data.projectName });
     const serviceId = items[0]?.serviceId || data.serviceId;
+    const project = findOrCreateProject({ clientId: data.clientId, serviceId, projectCode: data.projectCode, projectName: data.projectName });
     const service = CGM.serviceById(state, serviceId);
     const invoice = { id: CGM.uid(), number: CGM.nextNumber(state, "invoice", docPrefix("invoicePrefix", "INV")), clientId: data.clientId, date: data.date, dueDate: data.dueDate, serviceId, projectId: project?.id || "", projectCode: project?.code || "", incomeAccountId: service?.incomeAccountId || "sales_income", notes: data.notes, items, discount: defaultDiscount(), taxRate: defaultTaxRate(), status: "issued" };
     state.invoices.unshift(invoice);
@@ -2422,7 +2416,6 @@
       ${isInvoice ? input("dueDate", "Due date", "date", false, record.dueDate || CGM.today()) : ""}
       ${isExpense ? input("category", "Expense category", "text", true, record.category || "") : ""}
       ${isExpense ? input("vendor", "Vendor / supplier", "text", false, record.vendor || "") : ""}
-      <label class="field">Main service<select name="serviceId">${serviceOptions(record.serviceId)}</select></label>
       <label class="field">Status<select name="status">${statusOptions.map((status) => `<option value="${status}" ${CGM.statusOf(record) === status ? "selected" : ""}>${title(status)}</option>`).join("")}</select></label>
       ${!isExpense ? input("projectCode", "Project code", "text", false, record.projectCode || "") : `<label class="field">Project<select name="projectId">${projectOptions(record.projectId)}</select></label>`}
       ${!isExpense ? input("projectName", "Project name", "text", false, record.projectName || "") : ""}
@@ -2493,7 +2486,6 @@
       <label class="field full">Supplier<select name="supplierId" required>${supplierOptions(record.supplierId)}</select></label>
       ${input("date", "Bill date", "date", true, record.date || CGM.today())}
       ${input("dueDate", "Due date", "date", false, record.dueDate || CGM.today())}
-      <label class="field">Service<select name="serviceId">${serviceOptions(record.serviceId)}</select></label>
       <label class="field">Project<select name="projectId">${projectOptions(record.projectId)}</select></label>
       <label class="field full">Debit account<select name="accountId">${accountOptions(["Expenses", "Assets", "Cost of Sales"])}</select></label>
       ${itemEditor(editorId, "Supplier bill items", record.items || [{ description: record.description || "Supplier bill", qty: 1, rate: record.amount || 0, serviceId: record.serviceId }])}

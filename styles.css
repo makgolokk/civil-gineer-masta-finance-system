@@ -967,6 +967,10 @@ tbody tr:hover {
   text-transform: uppercase;
 }
 
+.item-cell > span {
+  display: none;
+}
+
 .item-cell input,
 .item-cell select {
   text-transform: none;
@@ -1700,6 +1704,10 @@ pre {
 
   .item-grid-head {
     display: none;
+  }
+
+  .item-cell > span {
+    display: inline;
   }
 
   .doc-item-row .item-description,
