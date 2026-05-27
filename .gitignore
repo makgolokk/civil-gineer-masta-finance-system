@@ -7,3 +7,7 @@ npm-debug.log*
 
 .vercel
 .env*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/.venv/

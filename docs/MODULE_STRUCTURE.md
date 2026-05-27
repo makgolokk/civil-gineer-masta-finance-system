@@ -10,6 +10,9 @@ This milestone starts reducing the size and risk of `cgm-app-v2.js` without chan
 - `src/modules/exportConfig.js`
   Resolves the export backend base URL for local and production export calls.
 
+- `src/modules/exportBackendService.js`
+  Non-breaking frontend service wrapper for the new FastAPI export backend endpoints. Current export workflows still use the existing fallback path until the backend is deployed and switched on deliberately.
+
 - `src/modules/formatters.js`
   Shared BWP currency, long date, month, and date-time formatters.
 
