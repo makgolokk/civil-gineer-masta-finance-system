@@ -827,7 +827,22 @@ td:nth-last-child(1) {
 }
 
 td:nth-last-child(1):has(.row-actions) {
-  min-width: 150px;
+  min-width: 186px;
+}
+
+.actions-cell {
+  width: 206px;
+  min-width: 206px;
+  max-width: 206px;
+}
+
+.workflow-table {
+  min-width: 960px;
+}
+
+.workflow-table th:last-child,
+.workflow-table td:last-child {
+  text-align: right;
 }
 
 tr:last-child td {
@@ -843,6 +858,8 @@ tbody tr:hover {
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+  justify-content: flex-end;
+  max-width: 100%;
 }
 
 .row-actions button {
@@ -854,6 +871,10 @@ tbody tr:hover {
   font-size: 0.72rem;
   line-height: 1;
   white-space: nowrap;
+}
+
+.row-actions .compact-action {
+  flex: 0 0 30px;
 }
 
 .row-actions .action-text {

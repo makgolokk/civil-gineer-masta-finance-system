@@ -1,6 +1,7 @@
 import { exportApiBaseUrl } from "./exportConfig.js";
 
 const DEFAULT_TIMEOUT_MS = 45000;
+const PDF_TIMEOUT_MS = 12000;
 
 async function postBlob(path, payload, options = {}) {
   const baseUrl = exportApiBaseUrl();
@@ -24,7 +25,7 @@ async function postBlob(path, payload, options = {}) {
 }
 
 async function postPdf(path, payload, options = {}) {
-  return postBlob(path, payload, options);
+  return postBlob(path, payload, { timeoutMs: PDF_TIMEOUT_MS, ...options });
 }
 
 export function exportQuotationPdf(payload) {

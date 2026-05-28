@@ -7,6 +7,7 @@ import { buildDashboardModel, inPeriod as isDateInPeriod, selectedPeriod as reso
 import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMiniReportTable, tableHtml as renderTableHtml } from "./src/modules/tableUtils.js";
 import { auditChangeRows, auditOptions, filterAuditEntries, formatAuditValue as formatAuditDisplayValue, parseAuditValue, summarizeAuditEntry } from "./src/modules/auditUtils.js";
 import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, parseBackupText } from "./src/modules/backupRecovery.js";
+import { buildFallbackPdfBlob } from "./src/modules/pdfFallback.js";
 
 (async function () {
   const money = moneyFormatter;
@@ -214,7 +215,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
     const duplicate = options.duplicate && canRecordAction(typeName, "create", item) ? rowAction("secondary-button", `data-record-duplicate="${typeName}" data-id="${item.id}"`, "copy", "Duplicate") : "";
     const edit = canRecordAction(typeName, "edit", item) ? rowAction("secondary-button", `data-record-edit="${typeName}" data-id="${item.id}"`, "pencil", "Edit") : "";
     const history = status === "archived" ? `<span class="muted">Archived</span>` : "";
-    return `<div class="row-actions">
+    const content = `
       ${edit}
       ${duplicate}
       ${preview}
@@ -222,7 +223,8 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
       ${voidButton}
       ${restore}
       ${history}
-    </div>`;
+    `;
+    return options.wrap === false ? content : `<div class="row-actions">${content}</div>`;
   }
 
   function rowAction(className, attrs, icon, label) {
@@ -430,7 +432,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
   }
 
   function quotationWorkflowTable() {
-    return `<div class="list-toolbar"><input data-table-search="quotationWorkflow" placeholder="Search quotations by number, client, project, service, or status"></div><div class="table-wrap"><table id="quotationWorkflow"><thead><tr><th>Quote</th><th>Client / prospect</th><th>Project</th><th>Service</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>
+    return `<div class="list-toolbar"><input data-table-search="quotationWorkflow" placeholder="Search quotations by number, client, project, service, or status"></div><div class="table-wrap"><table id="quotationWorkflow" class="workflow-table"><thead><tr><th>Quote</th><th>Client / prospect</th><th>Project</th><th>Service</th><th>Date</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${activeItems(state.quotations, true).map((quote) => `<tr>
         <td><strong>${quote.number}</strong><br><span class="muted">${esc(quote.notes || "")}</span></td>
         <td>${esc(quotationClientName(quote))}</td>
@@ -439,10 +441,10 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
         <td>${quote.date}</td>
         <td>${money.format(CGM.documentTotal(quote))}</td>
         <td>${badge(quote.status || "draft")}</td>
-        <td><div class="row-actions">
-          <button class="secondary-button" data-quote-approve="${quote.id}" ${["approved", "invoiced"].includes(quote.status) ? "disabled" : ""}><i data-lucide="check"></i>Approve</button>
-          <button class="secondary-button" data-quote-invoice="${quote.id}" ${quote.status !== "approved" ? "disabled" : ""}><i data-lucide="file-text"></i>Transfer to invoice</button>
-          ${actionButtons("quotation", quote, { document: true, duplicate: true })}
+        <td class="actions-cell"><div class="row-actions">
+          ${rowAction("secondary-button", `data-quote-approve="${quote.id}" ${["approved", "invoiced"].includes(quote.status) ? "disabled" : ""}`, "check", "Approve")}
+          ${rowAction("secondary-button", `data-quote-invoice="${quote.id}" ${quote.status !== "approved" ? "disabled" : ""}`, "file-text", "Transfer to invoice")}
+          ${actionButtons("quotation", quote, { document: true, duplicate: true, wrap: false })}
         </div></td>
       </tr>`).join("")}
     </tbody></table></div>`;
@@ -794,7 +796,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
           <div class="table-head"><div><h2>Debtor balances by client</h2><p>Client subledger balances reconcile to the Debtors Control account.</p></div></div>
           <div class="list-toolbar"><input data-table-search="clientsTable" placeholder="Search clients by name, code, contact, or status"></div>
           <div class="table-wrap"><table id="clientsTable"><thead><tr><th>Client</th><th>Contact</th><th>Status</th><th>Balance</th><th></th></tr></thead><tbody>
-            ${activeItems(state.clients, true).map((client) => `<tr><td><strong>${esc(client.name)}</strong><br><span class="muted">${esc(client.number)} | ${esc(client.code || "")}</span></td><td>${esc(client.email || client.phone || "")}</td><td>${statusBadge(client)}</td><td>${money.format(CGM.clientStatement(state, client.id).balance)}</td><td><div class="row-actions"><button class="secondary-button" data-statement="client" data-id="${client.id}"><i data-lucide="file-text"></i>Statement</button>${actionButtons("client", client)}</div></td></tr>`).join("")}
+            ${activeItems(state.clients, true).map((client) => `<tr><td><strong>${esc(client.name)}</strong><br><span class="muted">${esc(client.number)} | ${esc(client.code || "")}</span></td><td>${esc(client.email || client.phone || "")}</td><td>${statusBadge(client)}</td><td>${money.format(CGM.clientStatement(state, client.id).balance)}</td><td><div class="row-actions">${rowAction("secondary-button", `data-statement="client" data-id="${client.id}"`, "file-text", "Statement")}${actionButtons("client", client, { wrap: false })}</div></td></tr>`).join("")}
           </tbody></table></div>
         </section>
       </div>
@@ -835,7 +837,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
         <div class="table-head"><div><h2>Creditor balances by supplier</h2><p>Supplier subledger balances reconcile to the Creditors Control account.</p></div></div>
         <div class="list-toolbar"><input data-table-search="suppliersTable" placeholder="Search suppliers by name, contact, or status"></div>
         <div class="table-wrap"><table id="suppliersTable"><thead><tr><th>Supplier</th><th>Contact</th><th>Status</th><th>Amount owed</th><th></th></tr></thead><tbody>
-          ${activeItems(state.suppliers, true).map((supplier) => `<tr><td><strong>${esc(supplier.name)}</strong><br><span class="muted">${supplier.number}</span></td><td>${esc(supplier.email || supplier.phone || "")}</td><td>${statusBadge(supplier)}</td><td>${money.format(CGM.supplierStatement(state, supplier.id).balance)}</td><td><div class="row-actions"><button class="secondary-button" data-pay-supplier="${supplier.id}"><i data-lucide="credit-card"></i>Pay</button><button class="secondary-button" data-statement="supplier" data-id="${supplier.id}"><i data-lucide="file-text"></i>Statement</button>${actionButtons("supplier", supplier)}</div></td></tr>`).join("")}
+          ${activeItems(state.suppliers, true).map((supplier) => `<tr><td><strong>${esc(supplier.name)}</strong><br><span class="muted">${supplier.number}</span></td><td>${esc(supplier.email || supplier.phone || "")}</td><td>${statusBadge(supplier)}</td><td>${money.format(CGM.supplierStatement(state, supplier.id).balance)}</td><td><div class="row-actions">${rowAction("secondary-button", `data-pay-supplier="${supplier.id}"`, "credit-card", "Pay")}${rowAction("secondary-button", `data-statement="supplier" data-id="${supplier.id}"`, "file-text", "Statement")}${actionButtons("supplier", supplier, { wrap: false })}</div></td></tr>`).join("")}
         </tbody></table></div>
       </section>
     `;
@@ -1949,8 +1951,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
   async function exportReport(key, format, statementType = "", statementId = "") {
     const report = getReport(key, statementType, statementId);
     if (statementType === "client" && format === "pdf") {
-      const backendOk = await exportProfessionalPdf("client-statement", statementId, `${report.title}.pdf`);
-      if (!backendOk) notify("PDF not generated", "Client statements require the professional export backend to avoid unfinished PDF output.", "error");
+      await exportReliablePdf("client-statement", statementId, `${report.title}.pdf`);
       return;
     }
     if (format === "excel") {
@@ -1966,8 +1967,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
     const report = getDocumentReport(typeName, id);
     if (!report) return;
     if (format === "pdf" && ["quotation", "invoice", "receipt", "payment"].includes(typeName)) {
-      const backendOk = await exportProfessionalPdf(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`);
-      if (!backendOk) notify("PDF not generated", "This document requires the professional export backend to avoid unfinished field/value PDF output.", "error");
+      await exportReliablePdf(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`);
       return;
     }
     if (format === "excel") {
@@ -2003,14 +2003,14 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
     if (!requirePermission(typeName, "preview")) return;
     const report = getDocumentReport(typeName, id);
     if (!report) return;
-    const blob = ["quotation", "invoice", "receipt", "payment"].includes(typeName)
-      ? await getProfessionalPdfBlob(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`)
+    const result = ["quotation", "invoice", "receipt", "payment"].includes(typeName)
+      ? await getReliablePdfBlob(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`)
       : null;
-    if (!blob) {
-      notify("Preview unavailable", "The professional export backend is required for quotation, invoice, and receipt previews.", "error");
+    if (!result?.blob) {
+      notify("Preview unavailable", "The PDF could not be prepared from the backend or browser fallback.", "error");
       return;
     }
-    const url = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(result.blob);
     openModal(`Preview ${report.title}`, `<div class="pdf-preview">
       <iframe src="${url}" title="${esc(report.title)} preview"></iframe>
       <div class="actions"><button class="primary-button" data-export-document="${typeName}" data-id="${id}" data-format="pdf"><i data-lucide="file-down"></i>Download PDF</button><button class="secondary-button" type="button" data-modal-cancel>Close</button></div>
@@ -2018,18 +2018,28 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
     qs("#modalBackdrop").dataset.previewUrl = url;
   }
 
-  async function exportProfessionalPdf(kind, id, filename) {
-    const blob = await getProfessionalPdfBlob(kind, id, filename);
-    if (!blob) return false;
-    downloadBlob(blob, filename);
-    notify("Professional PDF ready", "Generated through the Civil-Gineer Masta export backend.", "success");
+  async function exportReliablePdf(kind, id, filename) {
+    const result = await getReliablePdfBlob(kind, id, filename);
+    if (!result?.blob) {
+      notify("PDF not generated", "The document could not be generated from the backend or browser fallback.", "error");
+      return false;
+    }
+    downloadBlob(result.blob, filename);
+    notify(result.source === "backend" ? "Professional PDF ready" : "PDF ready", result.source === "backend" ? "Generated through the Civil-Gineer Masta export backend." : "Generated in the browser because the export backend was unavailable.", result.source === "backend" ? "success" : "warning");
     return true;
   }
 
-  async function getProfessionalPdfBlob(kind, id, filename) {
+  async function getReliablePdfBlob(kind, id, filename) {
+    const payload = buildProfessionalExportPayload(kind, id, filename);
+    if (!payload) return null;
+    const backendBlob = await getProfessionalPdfBlob(kind, payload);
+    if (backendBlob) return { blob: backendBlob, source: "backend" };
+    const fallbackBlob = await buildFallbackPdfBlob(kind, payload);
+    return fallbackBlob ? { blob: fallbackBlob, source: "browser" } : null;
+  }
+
+  async function getProfessionalPdfBlob(kind, payload) {
     try {
-      const payload = buildProfessionalExportPayload(kind, id, filename);
-      if (!payload) return null;
       if (kind === "quotation") return await exportQuotationPdf(payload);
       if (kind === "invoice") return await exportInvoicePdf(payload);
       if (kind === "receipt") return await exportReceiptPdf(payload);
