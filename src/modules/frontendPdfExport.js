@@ -1,0 +1,261 @@
+import { CGM_COLORS, PDF_LAYOUT } from "./exportStyles.js";
+import { asText, dateTimeValue, moneyValue, safeFilename, titleCase } from "./exportFormatters.js";
+import { templateForPayload } from "./documentTemplates.js";
+import { validatePdfBlob } from "./exportValidation.js";
+
+let cachedLogo = null;
+
+async function pdfTools() {
+  const [{ jsPDF }, autoTableModule] = await Promise.all([
+    import("jspdf"),
+    import("jspdf-autotable"),
+  ]);
+  return { jsPDF, autoTable: autoTableModule.default };
+}
+
+async function logoDataUrl() {
+  if (cachedLogo !== null) return cachedLogo;
+  cachedLogo = "";
+  if (typeof fetch !== "function" || typeof FileReader === "undefined") return cachedLogo;
+  try {
+    const response = await fetch("assets/logo-doc.png");
+    if (!response.ok) return cachedLogo;
+    const blob = await response.blob();
+    cachedLogo = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    console.debug("Logo unavailable for local PDF export", error);
+  }
+  return cachedLogo;
+}
+
+function setColor(doc, color, method = "setTextColor") {
+  doc[method](...color);
+}
+
+function companyLines(company = {}) {
+  const reg = company.registrationNumber || company.regNumber || company.companyRegistration || "";
+  const tax = company.taxNumber || company.vatNumber || company.tin || "";
+  return [
+    company.address,
+    [company.phone, company.email].filter(Boolean).join(" | "),
+    [reg ? `Reg: ${reg}` : "", tax ? `Tax/VAT: ${tax}` : ""].filter(Boolean).join(" | "),
+  ].filter(Boolean);
+}
+
+async function addLetterhead(doc, template) {
+  const company = template.company || {};
+  setColor(doc, CGM_COLORS.black, "setFillColor");
+  doc.rect(0, 0, PDF_LAYOUT.pageWidth, PDF_LAYOUT.topBarHeight, "F");
+  setColor(doc, CGM_COLORS.red, "setFillColor");
+  doc.rect(0, 30, PDF_LAYOUT.pageWidth, 4, "F");
+  const logo = await logoDataUrl();
+  if (logo) {
+    try {
+      doc.addImage(logo, "PNG", 13, 7, 22, 18, undefined, "FAST");
+    } catch (error) {
+      console.debug("Logo could not be embedded in local PDF export", error);
+    }
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  setColor(doc, CGM_COLORS.white);
+  doc.text(company.name || "Civil-Gineer Masta Proprietary Limited", logo ? 39 : 14, 13);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  companyLines(company).slice(0, 3).forEach((line, index) => doc.text(line, logo ? 39 : 14, 19 + index * 4));
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(17);
+  doc.text(template.title, 196, 14, { align: "right" });
+  doc.setFontSize(9);
+  doc.text(template.number || "", 196, 22, { align: "right" });
+  setColor(doc, CGM_COLORS.black);
+}
+
+function addInfoBox(doc, title, rows, x, y, width, currency) {
+  setColor(doc, CGM_COLORS.line, "setDrawColor");
+  setColor(doc, CGM_COLORS.soft, "setFillColor");
+  doc.roundedRect(x, y, width, 40, 2, 2, "FD");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  setColor(doc, CGM_COLORS.red);
+  doc.text(title, x + 4, y + 7);
+  doc.setFontSize(7.5);
+  let offset = 14;
+  rows.filter(([, value]) => asText(value)).slice(0, 6).forEach(([label, value]) => {
+    setColor(doc, CGM_COLORS.muted);
+    doc.setFont("helvetica", "bold");
+    doc.text(`${label}:`, x + 4, y + offset);
+    setColor(doc, CGM_COLORS.black);
+    doc.setFont("helvetica", "normal");
+    const display = typeof value === "number" ? moneyValue(value, currency) : asText(value);
+    doc.text(doc.splitTextToSize(display, width - 35), x + 32, y + offset);
+    offset += 4.7;
+  });
+}
+
+function addFooter(doc, template) {
+  const company = template.company || {};
+  const pages = doc.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) {
+    doc.setPage(page);
+    setColor(doc, CGM_COLORS.line, "setDrawColor");
+    doc.line(14, PDF_LAYOUT.footerY, 196, PDF_LAYOUT.footerY);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    setColor(doc, CGM_COLORS.muted);
+    doc.text([company.name || "Civil-Gineer Masta", company.phone, company.email].filter(Boolean).join(" | "), 14, 291);
+    doc.text(`Page ${page} of ${pages}`, 196, 291, { align: "right" });
+    setColor(doc, CGM_COLORS.black);
+  }
+}
+
+function tableTheme() {
+  return {
+    theme: "grid",
+    styles: { font: "helvetica", fontSize: 7.8, cellPadding: 2.4, overflow: "linebreak", valign: "top", lineColor: CGM_COLORS.line, lineWidth: 0.15 },
+    headStyles: { fillColor: CGM_COLORS.black, textColor: CGM_COLORS.white, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: CGM_COLORS.soft },
+    margin: { left: 14, right: 14 },
+  };
+}
+
+function renderDocument(doc, autoTable, template) {
+  addInfoBox(doc, "Client Details", [
+    ["Client", template.client.name],
+    ["Contact", template.client.contact],
+    ["Email", template.client.email],
+    ["Phone", template.client.phone],
+    ["Address", template.client.address],
+  ], 14, 43, 86, template.currency);
+  addInfoBox(doc, "Document Details", template.details, 110, 43, 86, template.currency);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text("Scope and Line Items", 14, 91);
+  autoTable(doc, {
+    ...tableTheme(),
+    startY: 96,
+    head: [["Description", "Service", "Qty", "Unit", "Rate", "Amount"]],
+    body: template.items.map((item) => [item.description, item.service, item.qty, item.unit, moneyValue(item.rate, template.currency), moneyValue(item.amount, template.currency)]),
+    tableWidth: 182,
+    columnStyles: { 0: { cellWidth: 66 }, 1: { cellWidth: 34 }, 2: { cellWidth: 13, halign: "right" }, 3: { cellWidth: 16 }, 4: { cellWidth: 25, halign: "right" }, 5: { cellWidth: 28, halign: "right" } },
+  });
+  const totalsY = Math.min((doc.lastAutoTable?.finalY || 112) + 8, 235);
+  autoTable(doc, {
+    startY: totalsY,
+    margin: { left: 120 },
+    body: template.totals.map(([label, value]) => [label, moneyValue(value, template.currency)]),
+    theme: "plain",
+    tableWidth: 76,
+    styles: { fontSize: 8.8, cellPadding: 2 },
+    columnStyles: { 0: { fontStyle: "bold", cellWidth: 38 }, 1: { halign: "right", cellWidth: 38 } },
+    didParseCell(data) {
+      if (data.row.index >= data.table.body.length - 1) data.cell.styles.fontStyle = "bold";
+    },
+  });
+  setColor(doc, CGM_COLORS.line, "setDrawColor");
+  doc.line(14, totalsY, 112, totalsY);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.8);
+  doc.text("Notes / Exclusions", 14, totalsY + 6);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.8);
+  doc.text(doc.splitTextToSize(template.notes.join("\n") || "Thank you for your business.", 94), 14, totalsY + 12);
+  doc.setFont("helvetica", "bold");
+  doc.text("Payment Terms", 14, 266);
+  doc.setFont("helvetica", "normal");
+  doc.text(doc.splitTextToSize(template.paymentTerms, 84), 14, 271);
+  doc.setFont("helvetica", "bold");
+  doc.text("Prepared by", 112, 266);
+  doc.text("Approved by", 154, 266);
+  setColor(doc, CGM_COLORS.line, "setDrawColor");
+  doc.line(112, 276, 145, 276);
+  doc.line(154, 276, 187, 276);
+  doc.setFont("helvetica", "normal");
+  setColor(doc, CGM_COLORS.muted);
+  doc.text(template.preparedBy || " ", 112, 281);
+  doc.text(template.approvedBy || " ", 154, 281);
+  setColor(doc, CGM_COLORS.black);
+}
+
+function renderReceipt(doc, autoTable, template) {
+  addInfoBox(doc, "Received From", [["Client", template.client.name], ["Email", template.client.email], ["Phone", template.client.phone], ["Address", template.client.address]], 14, 43, 86, template.currency);
+  addInfoBox(doc, "Payment Details", template.details, 110, 43, 86, template.currency);
+  setColor(doc, CGM_COLORS.paleRed, "setFillColor");
+  setColor(doc, CGM_COLORS.line, "setDrawColor");
+  doc.roundedRect(14, 96, 182, 34, 2, 2, "FD");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.text("Amount Received", 22, 111);
+  doc.setFontSize(20);
+  setColor(doc, CGM_COLORS.red);
+  doc.text(moneyValue(template.amountReceived, template.currency), 188, 113, { align: "right" });
+  setColor(doc, CGM_COLORS.black);
+  autoTable(doc, {
+    startY: 144,
+    margin: { left: 108 },
+    body: template.totals.map(([label, value]) => [label, moneyValue(value, template.currency)]),
+    theme: "grid",
+    tableWidth: 88,
+    styles: { fontSize: 8.8, cellPadding: 2, lineColor: CGM_COLORS.line },
+    columnStyles: { 0: { fontStyle: "bold", cellWidth: 42 }, 1: { halign: "right", cellWidth: 46 } },
+  });
+  doc.setFontSize(8.5);
+  doc.text(doc.splitTextToSize(template.notes.join("\n"), 182), 14, 172);
+}
+
+function renderStatement(doc, autoTable, template) {
+  addInfoBox(doc, "Client", [["Name", template.client.name], ["Email", template.client.email], ["Phone", template.client.phone], ["Address", template.client.address]], 14, 43, 86, template.currency);
+  addInfoBox(doc, "Statement", template.details, 110, 43, 86, template.currency);
+  autoTable(doc, {
+    ...tableTheme(),
+    startY: 94,
+    head: [template.headers],
+    body: template.rows.map((row) => row.map((cell, index) => index >= 3 ? moneyValue(cell, template.currency) : cell)),
+    columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
+  });
+  autoTable(doc, {
+    startY: (doc.lastAutoTable?.finalY || 110) + 8,
+    margin: { left: 120 },
+    body: template.totals.map(([label, value]) => [label, moneyValue(value, template.currency)]),
+    theme: "plain",
+    tableWidth: 76,
+    styles: { fontSize: 9.5, fontStyle: "bold" },
+    columnStyles: { 1: { halign: "right" } },
+  });
+}
+
+function renderReport(doc, autoTable, template) {
+  addInfoBox(doc, "Report Details", [["Generated", dateTimeValue(template.generatedAt)], ...template.filters], 14, 43, 182, template.currency);
+  autoTable(doc, {
+    ...tableTheme(),
+    startY: 94,
+    head: [template.headers],
+    body: template.rows,
+    styles: { ...tableTheme().styles, fontSize: template.headers.length > 5 ? 7 : 8 },
+  });
+}
+
+export async function buildFrontendPdfBlob(kind, payload) {
+  const { jsPDF, autoTable } = await pdfTools();
+  const template = templateForPayload(kind, payload);
+  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
+  await addLetterhead(doc, template);
+  if (template.type === "business-document") renderDocument(doc, autoTable, template);
+  else if (template.type === "receipt") renderReceipt(doc, autoTable, template);
+  else if (template.type === "statement") renderStatement(doc, autoTable, template);
+  else renderReport(doc, autoTable, template);
+  addFooter(doc, template);
+  const blob = doc.output("blob");
+  const validation = await validatePdfBlob(blob);
+  if (!validation.ok) throw new Error(validation.reason);
+  return blob;
+}
+
+export function frontendPdfFilename(kind, payload) {
+  return safeFilename(templateForPayload(kind, payload).filenameTitle, "pdf");
+}

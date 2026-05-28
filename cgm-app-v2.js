@@ -1,13 +1,15 @@
 import { formatDateTime as formatDateTimeValue, formatLongDate as formatLongDateValue, formatMonthName, moneyFormatter } from "./src/modules/formatters.js";
 import { canRoleAction, canRoleRecordAction } from "./src/modules/permissions.js";
 import { nextOfficialNumber, periodKey, previewPeriodCode, reservePreviewedPeriodCode, syncCounterFromCode } from "./src/modules/numberingService.js";
-import { exportClientStatementPdf, exportInvoicePdf, exportQuotationPdf, exportReceiptPdf, exportReportExcel } from "./src/modules/exportBackendService.js";
+import { exportClientStatementPdf, exportGenericPdf, exportInvoicePdf, exportQuotationPdf, exportReceiptPdf, exportReportExcel } from "./src/modules/exportBackendService.js";
 import { accountName as lookupAccountName, clientName as lookupClientName, clientSnapshotFromEntry as buildClientSnapshot, projectLabel as lookupProjectLabel, quotationClientName as lookupQuotationClientName, serviceName as lookupServiceName, supplierName as lookupSupplierName } from "./src/modules/clientProjectUtils.js";
 import { buildDashboardModel, inPeriod as isDateInPeriod, selectedPeriod as resolveSelectedPeriod } from "./src/modules/dashboardUtils.js";
 import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMiniReportTable, tableHtml as renderTableHtml } from "./src/modules/tableUtils.js";
 import { auditChangeRows, auditOptions, filterAuditEntries, formatAuditValue as formatAuditDisplayValue, parseAuditValue, summarizeAuditEntry } from "./src/modules/auditUtils.js";
 import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, parseBackupText } from "./src/modules/backupRecovery.js";
-import { buildFallbackPdfBlob } from "./src/modules/pdfFallback.js";
+import { buildFrontendPdfBlob } from "./src/modules/frontendPdfExport.js";
+import { buildFrontendExcelBlob } from "./src/modules/frontendExcelExport.js";
+import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidation.js";
 
 (async function () {
   const money = moneyFormatter;
@@ -1950,16 +1952,12 @@ import { buildFallbackPdfBlob } from "./src/modules/pdfFallback.js";
 
   async function exportReport(key, format, statementType = "", statementId = "") {
     const report = getReport(key, statementType, statementId);
-    if (statementType === "client" && format === "pdf") {
-      await exportReliablePdf("client-statement", statementId, `${report.title}.pdf`);
+    if (format === "pdf" && statementType === "client") return await exportReliablePdf("client-statement", statementId, `${report.title}.pdf`);
+    if (format === "excel") {
+      await exportReliableExcel("report", { report, context: exportContext(), filename: `${report.title}.xlsx` }, `${report.title}.xlsx`);
       return;
     }
-    if (format === "excel") {
-      const backendExcel = await exportProfessionalExcel(report, `${report.title}.xlsx`);
-      if (backendExcel) return;
-      downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
-    }
-    else downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
+    await exportReliablePdf("report", "", `${report.title}.pdf`, { report, context: exportContext(), filename: `${report.title}.pdf` });
   }
 
   async function exportDocument(typeName, id, format = "pdf") {
@@ -1971,31 +1969,46 @@ import { buildFallbackPdfBlob } from "./src/modules/pdfFallback.js";
       return;
     }
     if (format === "excel") {
-      const backendExcel = await exportProfessionalExcel(report, `${report.title}.xlsx`);
-      if (backendExcel) return;
-      downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
+      await exportReliableExcel("report", { report, context: exportContext(), filename: `${report.title}.xlsx` }, `${report.title}.xlsx`);
+      return;
     }
-    else downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
+    await exportReliablePdf("report", "", `${report.title}.pdf`, { report, context: exportContext(), filename: `${report.title}.pdf` });
   }
 
-  async function exportProfessionalExcel(report, filename) {
-    try {
-      const blob = await exportReportExcel({
-        report: {
-          title: report.title,
-          headers: report.headers,
-          rows: report.rows,
-          generatedAt: new Date().toISOString(),
-        },
-        context: exportContext(),
-        filename,
-      });
-      downloadBlob(blob, filename);
+  async function exportReliableExcel(kind, payload, filename) {
+    const backendBlob = await getProfessionalExcelBlob(payload);
+    if (backendBlob) {
+      downloadBlob(backendBlob, filename);
       notify("Excel report ready", "Generated a formatted workbook with office-ready headings, filters, frozen headers, and totals.", "success");
       return true;
+    }
+    try {
+      const blob = await buildFrontendExcelBlob(kind, payload);
+      downloadBlob(blob, filename);
+      notify("Excel ready", "Backend export unavailable. Generated using local office-ready export.", "warning");
+      return true;
     } catch (error) {
-      notify("Using fallback spreadsheet", userMessageForError(error, "export"), "warning");
+      console.error("Local Excel export failed", error);
+      notify("Excel not generated", "The workbook could not be generated. Please try again.", "error");
       return false;
+    }
+  }
+
+  async function getProfessionalExcelBlob(payload) {
+    try {
+      const blob = await exportReportExcel({
+        ...payload,
+        report: {
+          ...(payload.report || {}),
+          generatedAt: new Date().toISOString(),
+        },
+      });
+      const validation = await validateExcelBlob(blob);
+      if (!validation.ok) throw new Error(validation.reason);
+      return blob;
+    } catch (error) {
+      console.debug("Backend Excel export unavailable", error);
+      return null;
     }
   }
 
@@ -2018,35 +2031,40 @@ import { buildFallbackPdfBlob } from "./src/modules/pdfFallback.js";
     qs("#modalBackdrop").dataset.previewUrl = url;
   }
 
-  async function exportReliablePdf(kind, id, filename) {
-    const result = await getReliablePdfBlob(kind, id, filename);
+  async function exportReliablePdf(kind, id, filename, directPayload = null) {
+    const result = await getReliablePdfBlob(kind, id, filename, directPayload);
     if (!result?.blob) {
       notify("PDF not generated", "The document could not be generated from the backend or browser fallback.", "error");
       return false;
     }
     downloadBlob(result.blob, filename);
-    notify(result.source === "backend" ? "Professional PDF ready" : "PDF ready", result.source === "backend" ? "Generated through the Civil-Gineer Masta export backend." : "Generated in the browser because the export backend was unavailable.", result.source === "backend" ? "success" : "warning");
+    notify(result.source === "backend" ? "Professional PDF ready" : "PDF ready", result.source === "backend" ? "Generated through the Civil-Gineer Masta export backend." : "Backend export unavailable. Generated using local office-ready export.", result.source === "backend" ? "success" : "warning");
     return true;
   }
 
-  async function getReliablePdfBlob(kind, id, filename) {
-    const payload = buildProfessionalExportPayload(kind, id, filename);
+  async function getReliablePdfBlob(kind, id, filename, directPayload = null) {
+    const payload = directPayload || buildProfessionalExportPayload(kind, id, filename);
     if (!payload) return null;
     const backendBlob = await getProfessionalPdfBlob(kind, payload);
     if (backendBlob) return { blob: backendBlob, source: "backend" };
-    const fallbackBlob = await buildFallbackPdfBlob(kind, payload);
+    const fallbackBlob = await buildFrontendPdfBlob(kind, payload);
     return fallbackBlob ? { blob: fallbackBlob, source: "browser" } : null;
   }
 
   async function getProfessionalPdfBlob(kind, payload) {
     try {
-      if (kind === "quotation") return await exportQuotationPdf(payload);
-      if (kind === "invoice") return await exportInvoicePdf(payload);
-      if (kind === "receipt") return await exportReceiptPdf(payload);
-      if (kind === "client-statement") return await exportClientStatementPdf(payload);
-      return null;
+      let blob = null;
+      if (kind === "quotation") blob = await exportQuotationPdf(payload);
+      else if (kind === "invoice") blob = await exportInvoicePdf(payload);
+      else if (kind === "receipt") blob = await exportReceiptPdf(payload);
+      else if (kind === "client-statement") blob = await exportClientStatementPdf(payload);
+      else if (kind === "report") blob = await exportGenericPdf({ documentType: "report", kind: "report", ...payload });
+      if (!blob) return null;
+      const validation = await validatePdfBlob(blob);
+      if (!validation.ok) throw new Error(validation.reason);
+      return blob;
     } catch (error) {
-      notify("Professional export unavailable", userMessageForError(error, "export"), "warning");
+      console.debug("Backend PDF export unavailable", error);
       return null;
     }
   }
@@ -2760,60 +2778,12 @@ import { buildFallbackPdfBlob } from "./src/modules/pdfFallback.js";
     }
   }
 
-  function downloadExcelLike(filename, titleText, headers, rows) {
-    const company = settings().companyProfile;
-    const html = `<html><head><meta charset="utf-8"><style>
-      table{border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px}
-      th,td{border:1px solid #d8dde4;padding:7px 9px;vertical-align:top}
-      .company{font-size:16px;font-weight:700;color:#111111;background:#f5f6f8}
-      .title{font-size:14px;font-weight:700;color:#d71920}
-      .generated{color:#5f6672}
-      .head th{background:#111111;color:#ffffff;font-weight:700}
-    </style></head><body><table>
-      <tr><th class="company" colspan="${headers.length}">${esc(company.name || "Civil-Gineer Masta Proprietary Limited")}</th></tr>
-      <tr><th class="title" colspan="${headers.length}">${esc(titleText)}</th></tr>
-      <tr><td class="generated" colspan="${headers.length}">Generated ${esc(new Date().toLocaleString())}</td></tr>
-      <tr class="head">${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>
-      ${rows.map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join("")}</tr>`).join("")}
-    </table></body></html>`;
-    downloadBlob(new Blob([html], { type: "application/vnd.ms-excel" }), filename);
-  }
-
-  function downloadPdf(filename, lines) {
-    const safe = lines.flatMap((line) => wrap(String(line).replace(/[^\x20-\x7E]/g, " "), 92));
-    const content = ["BT", "/F1 15 Tf", "50 790 Td", "(Civil-Gineer Masta) Tj", "/F1 10 Tf", ...safe.map((line, i) => `1 0 0 1 50 ${760 - i * 14} Tm (${line.replace(/[\\()]/g, "\\$&")}) Tj`), "ET"].join("\n");
-    const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", `<< /Length ${content.length} >>\nstream\n${content}\nendstream`];
-    let pdf = "%PDF-1.4\n";
-    const offsets = [0];
-    objects.forEach((object, index) => {
-      offsets.push(pdf.length);
-      pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-    });
-    const xref = pdf.length;
-    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((o) => `${String(o).padStart(10, "0")} 00000 n `).join("\n")}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-    downloadBlob(new Blob([pdf], { type: "application/pdf" }), filename);
-  }
-
   function downloadBlob(blob, filename) {
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  }
-
-  function wrap(line, max) {
-    const words = line.split(" ");
-    const lines = [];
-    let current = "";
-    words.forEach((word) => {
-      if (`${current} ${word}`.trim().length > max) {
-        lines.push(current);
-        current = word;
-      } else current = `${current} ${word}`.trim();
-    });
-    if (current) lines.push(current);
-    return lines;
   }
 
   document.addEventListener("click", (event) => {

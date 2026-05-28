@@ -44,6 +44,10 @@ export function exportClientStatementPdf(payload) {
   return postPdf("/exports/client-statement", payload);
 }
 
+export function exportGenericPdf(payload) {
+  return postPdf("/api/export/pdf", payload);
+}
+
 export function exportReportExcel(payload) {
   return postBlob("/exports/excel", payload);
 }
