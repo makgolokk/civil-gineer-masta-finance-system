@@ -394,7 +394,9 @@
       return next;
     } catch (error) {
       console.error("Supabase load failed", error);
-      window.CGMDatabaseError = error.message || "Could not load Supabase data.";
+      window.CGMDatabaseError = /VITE_SUPABASE|Supabase is not configured/i.test(error.message || "")
+        ? "Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to use production persistence."
+        : "Could not load Supabase data. The app is using local recovery data until the database connection is restored.";
       return normalize(localState || (legacyState ? migrateLegacy(legacyState) : emptyState));
     }
   }

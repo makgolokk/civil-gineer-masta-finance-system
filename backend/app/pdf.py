@@ -103,6 +103,11 @@ def project_label(context: ExportContext, document) -> str:
     return getattr(document, "projectName", "") or getattr(document, "projectCode", "") or "General works"
 
 
+def project_location(context: ExportContext, document) -> str:
+    project = find_by_id(context.projects, getattr(document, "projectId", ""))
+    return getattr(document, "location", "") or getattr(project, "location", "") or ""
+
+
 def service_name(context: ExportContext, service_id: str) -> str:
     service = find_by_id(context.services, service_id)
     return service.name if service else "General"
@@ -150,18 +155,18 @@ def info_box(title: str, rows: list[tuple[str, str]], sheet, width: float = 86 *
 
 
 def items_table(items: list[ItemLine], sheet, currency: str) -> Table:
-    data = [[p("Description", sheet["BoxTitle"]), p("Service", sheet["BoxTitle"]), p("Qty", sheet["BoxTitle"]), p("Rate", sheet["BoxTitle"]), p("Amount", sheet["BoxTitle"])]]
+    data = [[p("Description", sheet["BoxTitle"]), p("Qty", sheet["BoxTitle"]), p("Unit", sheet["BoxTitle"]), p("Rate", sheet["BoxTitle"]), p("Amount", sheet["BoxTitle"])]]
     for item in items:
         data.append([
             p(item.description, sheet["Normal"]),
-            p(item.serviceId.replace("_", " ").title(), sheet["Normal"]),
             p(item.qty, sheet["Right"]),
+            p(item.unit or "Each", sheet["Normal"]),
             p(money(item.rate, currency), sheet["Right"]),
             p(money(line_total(item), currency), sheet["Right"]),
         ])
     if len(data) == 1:
         data.append([p("No line items supplied", sheet["Normal"]), "", "", "", ""])
-    table = Table(data, colWidths=[68 * mm, 36 * mm, 18 * mm, 26 * mm, 30 * mm], repeatRows=1)
+    table = Table(data, colWidths=[82 * mm, 18 * mm, 24 * mm, 26 * mm, 30 * mm], repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), BLACK),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -174,13 +179,14 @@ def items_table(items: list[ItemLine], sheet, currency: str) -> Table:
     return table
 
 
-def totals_box(subtotal: float, discount: float, tax: float, paid: float, total: float, sheet, currency: str) -> Table:
+def totals_box(subtotal: float, discount: float, tax: float, paid: float, total: float, sheet, currency: str, balance: float | None = None) -> Table:
+    balance_due = max(0, total - paid) if balance is None else float(balance or 0)
     rows = [
         ["Subtotal", money(subtotal, currency)],
         ["Discount", money(discount, currency)],
         ["VAT / Tax", money(tax, currency)],
         ["Amount paid", money(paid, currency)],
-        ["Balance due", money(max(0, total - paid), currency)],
+        ["Balance due", money(balance_due, currency)],
         ["Total", money(total, currency)],
     ]
     table = Table([[p(label, sheet["Normal"]), p(value, sheet["Right"])] for label, value in rows], colWidths=[32 * mm, 38 * mm])
@@ -195,7 +201,7 @@ def totals_box(subtotal: float, discount: float, tax: float, paid: float, total:
     return table
 
 
-def footer_sections(company: CompanyProfile, sheet) -> list:
+def footer_sections(company: CompanyProfile, sheet, payment_terms: str = "", prepared_by: str = "", approved_by: str = "") -> list:
     bank = company.bankingDetails
     return [
         Table([[info_box("Banking Details", [
@@ -205,9 +211,9 @@ def footer_sections(company: CompanyProfile, sheet) -> list:
             ("Account number", bank.accountNumber),
             ("Branch", f"{bank.branchName} {bank.branchCode}".strip()),
         ], sheet), info_box("Terms and Approval", [
-            ("Terms", company.defaultTerms),
-            ("Prepared by", company.preparedBy),
-            ("Approved by", company.approvedBy or "________________"),
+            ("Terms", payment_terms or company.defaultTerms),
+            ("Prepared by", prepared_by or company.preparedBy),
+            ("Approved by", approved_by or company.approvedBy or "________________"),
             ("Signature", "________________________"),
         ], sheet)]], colWidths=[86 * mm, 86 * mm]),
         Spacer(1, 6),
@@ -218,7 +224,19 @@ def footer_sections(company: CompanyProfile, sheet) -> list:
 def build_pdf(story: list) -> bytes:
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=17 * mm, rightMargin=17 * mm, topMargin=13 * mm, bottomMargin=13 * mm)
-    doc.build(story)
+
+    def draw_page_footer(canvas, document):
+        canvas.saveState()
+        canvas.setStrokeColor(LINE)
+        canvas.setLineWidth(0.4)
+        canvas.line(17 * mm, 10 * mm, A4[0] - 17 * mm, 10 * mm)
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(17 * mm, 6 * mm, "Civil-Gineer Masta Proprietary Limited")
+        canvas.drawRightString(A4[0] - 17 * mm, 6 * mm, f"Page {document.page}")
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=draw_page_footer, onLaterPages=draw_page_footer)
     return buffer.getvalue()
 
 
@@ -230,10 +248,13 @@ def build_document_pdf(kind: str, document: Quotation | Invoice, context: Export
     subtotal = document_subtotal(document.items)
     discount = float(document.discount or 0)
     tax = document_tax(subtotal, discount, float(document.taxRate or 0), document.taxAmount)
-    total = document_total(document.items, discount, float(document.taxRate or 0), document.taxAmount)
+    total = float(document.total) if getattr(document, "total", None) is not None else document_total(document.items, discount, float(document.taxRate or 0), document.taxAmount)
     paid = float(getattr(document, "amountPaid", 0) or 0)
+    balance_due = getattr(document, "balanceDue", None)
     due_label = "Due date" if kind == "Invoice" else "Valid until"
     due_value = getattr(document, "dueDate", "") if kind == "Invoice" else getattr(document, "validUntil", "")
+    notes = document.notes or company.defaultNotes
+    exclusions = getattr(document, "exclusions", "")
     story = [
         brand_header(company, kind, document.number, sheet, logo_path),
         Spacer(1, 12),
@@ -250,6 +271,7 @@ def build_document_pdf(kind: str, document: Quotation | Invoice, context: Export
                 ("Date", document.date),
                 (due_label, due_value),
                 ("Project", project_label(context, document)),
+                ("Location", project_location(context, document)),
                 ("Service", service_name(context, document.serviceId)),
                 ("Status", document.status.title()),
             ], sheet),
@@ -259,9 +281,9 @@ def build_document_pdf(kind: str, document: Quotation | Invoice, context: Export
         Spacer(1, 4),
         items_table(document.items, sheet, currency),
         Spacer(1, 10),
-        Table([[p(document.notes or company.defaultNotes, sheet["Normal"]), totals_box(subtotal, discount, tax, paid, total, sheet, currency)]], colWidths=[98 * mm, 74 * mm]),
+        Table([[p("<b>Notes / Exclusions</b><br/>" + "<br/>".join([value for value in [notes, exclusions] if value]), sheet["Normal"]), totals_box(subtotal, discount, tax, paid, total, sheet, currency, balance_due)]], colWidths=[98 * mm, 74 * mm]),
         Spacer(1, 12),
-        *footer_sections(company, sheet),
+        *footer_sections(company, sheet, getattr(document, "paymentTerms", ""), getattr(document, "preparedBy", ""), getattr(document, "approvedBy", "")),
     ]
     return build_pdf(story)
 
@@ -274,6 +296,7 @@ def build_receipt_pdf(receipt: Receipt, context: ExportContext, logo_path: Path 
     client = client_for_document(context, invoice)
     total = document_total(invoice.items, invoice.discount, invoice.taxRate, invoice.taxAmount) if invoice.number else 0
     paid_total = sum(payment.amount for payment in context.payments if payment.invoiceId == receipt.invoiceId)
+    balance = max(0, total - paid_total)
     story = [
         brand_header(company, "Receipt", receipt.receiptNumber, sheet, logo_path),
         Spacer(1, 12),
@@ -283,8 +306,10 @@ def build_receipt_pdf(receipt: Receipt, context: ExportContext, logo_path: Path 
                 ("Receipt no.", receipt.receiptNumber),
                 ("Date", receipt.date),
                 ("Invoice", invoice.number),
+                ("Quotation / ref.", receipt.reference),
                 ("Method", receipt.method),
                 ("Reference", receipt.reference),
+                ("Prepared by", getattr(receipt, "preparedBy", "") or company.preparedBy),
             ], sheet),
         ]], colWidths=[86 * mm, 86 * mm]),
         Spacer(1, 18),
@@ -295,9 +320,9 @@ def build_receipt_pdf(receipt: Receipt, context: ExportContext, logo_path: Path 
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ]),
         Spacer(1, 10),
-        totals_box(total, 0, 0, paid_total, total, sheet, currency),
+        totals_box(total, 0, 0, paid_total, total, sheet, currency, balance),
         Spacer(1, 14),
-        p(f"Thank you for your payment. This receipt confirms funds recorded against invoice {invoice.number}.", sheet["Normal"]),
+        p(f"Thank you for your payment. This receipt confirms funds recorded against invoice {invoice.number or receipt.invoiceId}. Balance remaining: {money(balance, currency)}.", sheet["Normal"]),
         Spacer(1, 12),
         *footer_sections(company, sheet),
     ]
@@ -327,7 +352,7 @@ def build_statement_pdf(statement: ClientStatement, context: ExportContext, logo
         Spacer(1, 12),
         Table([[
             info_box("Client", [("Name", statement.client.name), ("Email", statement.client.email), ("Phone", statement.client.phone), ("Address", statement.client.address)], sheet),
-            info_box("Statement", [("From", statement.fromDate), ("To", statement.toDate), ("Opening balance", money(statement.openingBalance, currency)), ("Balance carried forward", money(statement.balance, currency))], sheet),
+            info_box("Statement", [("Statement date", statement.toDate), ("From", statement.fromDate), ("To", statement.toDate), ("Opening balance", money(statement.openingBalance, currency)), ("Closing balance", money(statement.balance, currency))], sheet),
         ]], colWidths=[86 * mm, 86 * mm]),
         Spacer(1, 12),
         table,

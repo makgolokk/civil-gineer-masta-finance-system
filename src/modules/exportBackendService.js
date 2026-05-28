@@ -2,7 +2,7 @@ import { exportApiBaseUrl } from "./exportConfig.js";
 
 const DEFAULT_TIMEOUT_MS = 45000;
 
-async function postPdf(path, payload, options = {}) {
+async function postBlob(path, payload, options = {}) {
   const baseUrl = exportApiBaseUrl();
   if (!baseUrl) throw new Error("Export backend URL is not configured.");
   const controller = new AbortController();
@@ -23,6 +23,10 @@ async function postPdf(path, payload, options = {}) {
   }
 }
 
+async function postPdf(path, payload, options = {}) {
+  return postBlob(path, payload, options);
+}
+
 export function exportQuotationPdf(payload) {
   return postPdf("/exports/quotation", payload);
 }
@@ -37,6 +41,10 @@ export function exportReceiptPdf(payload) {
 
 export function exportClientStatementPdf(payload) {
   return postPdf("/exports/client-statement", payload);
+}
+
+export function exportReportExcel(payload) {
+  return postBlob("/exports/excel", payload);
 }
 
 export async function checkExportBackendHealth() {

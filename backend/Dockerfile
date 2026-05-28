@@ -12,4 +12,4 @@ ENV CGM_EXPORT_ENVIRONMENT=production
 ENV CGM_EXPORT_LOGO_PATH=assets/logo.png
 EXPOSE 8765
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8765}"]

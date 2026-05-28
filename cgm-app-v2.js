@@ -1,7 +1,7 @@
 import { formatDateTime as formatDateTimeValue, formatLongDate as formatLongDateValue, formatMonthName, moneyFormatter } from "./src/modules/formatters.js";
 import { canRoleAction, canRoleRecordAction } from "./src/modules/permissions.js";
 import { nextOfficialNumber, periodKey, previewPeriodCode, reservePreviewedPeriodCode, syncCounterFromCode } from "./src/modules/numberingService.js";
-import { exportClientStatementPdf, exportInvoicePdf, exportQuotationPdf, exportReceiptPdf } from "./src/modules/exportBackendService.js";
+import { exportClientStatementPdf, exportInvoicePdf, exportQuotationPdf, exportReceiptPdf, exportReportExcel } from "./src/modules/exportBackendService.js";
 import { accountName as lookupAccountName, clientName as lookupClientName, clientSnapshotFromEntry as buildClientSnapshot, projectLabel as lookupProjectLabel, quotationClientName as lookupQuotationClientName, serviceName as lookupServiceName, supplierName as lookupSupplierName } from "./src/modules/clientProjectUtils.js";
 import { buildDashboardModel, inPeriod as isDateInPeriod, selectedPeriod as resolveSelectedPeriod } from "./src/modules/dashboardUtils.js";
 import { decorateResponsiveTables, filterTableRows, miniReportTable as renderMiniReportTable, tableHtml as renderTableHtml } from "./src/modules/tableUtils.js";
@@ -93,7 +93,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
       return true;
     } catch (error) {
       console.error("Supabase save failed", error);
-      appError = error.message || "Could not save changes to Supabase.";
+      appError = userMessageForError(error, "save");
       if (auditEntry) state.auditLog = (state.auditLog || []).filter((entry) => entry.id !== auditEntry.id);
       notify("Save failed", appError, "error");
       return false;
@@ -120,6 +120,19 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
       toast.classList.remove("show");
       setTimeout(() => toast.remove(), 220);
     }, 4200);
+  }
+
+  function userMessageForError(error, area = "general") {
+    const raw = String(error?.message || error || "");
+    console.info(`CGM ${area} technical detail:`, error);
+    if (/fetch|network|failed to fetch|load failed/i.test(raw)) return "The business database or export service could not be reached. Check your connection and try again.";
+    if (/duplicate|unique|already exists/i.test(raw)) return "This record number already exists. Refresh the app and try again so a safe new number can be reserved.";
+    if (/permission|row level security|rls|unauthorized|403/i.test(raw)) return "Your current login or database permissions do not allow this action.";
+    if (/VITE_EXPORT_API_BASE_URL|Export backend URL/i.test(raw)) return "The export backend is not configured. Add VITE_EXPORT_API_BASE_URL before using professional exports.";
+    if (/VITE_SUPABASE|supabase/i.test(raw)) return "Supabase is not configured correctly. Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.";
+    if (area === "restore") return "The selected backup could not be restored. Confirm it is a Civil-Gineer Masta backup file and try again.";
+    if (area === "export") return "The professional export could not be generated. Please try again after checking the export backend.";
+    return raw || "The action could not be completed. Please try again.";
   }
 
   function openPortal(portal) {
@@ -1935,11 +1948,16 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
 
   async function exportReport(key, format, statementType = "", statementId = "") {
     const report = getReport(key, statementType, statementId);
-    const backendOk = statementType === "client" && format === "pdf"
-      ? await exportProfessionalPdf("client-statement", statementId, `${report.title}.pdf`)
-      : false;
-    if (backendOk) return;
-    if (format === "excel") downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
+    if (statementType === "client" && format === "pdf") {
+      const backendOk = await exportProfessionalPdf("client-statement", statementId, `${report.title}.pdf`);
+      if (!backendOk) notify("PDF not generated", "Client statements require the professional export backend to avoid unfinished PDF output.", "error");
+      return;
+    }
+    if (format === "excel") {
+      const backendExcel = await exportProfessionalExcel(report, `${report.title}.xlsx`);
+      if (backendExcel) return;
+      downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
+    }
     else downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
   }
 
@@ -1947,12 +1965,38 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
     if (!requirePermission(typeName, "export")) return;
     const report = getDocumentReport(typeName, id);
     if (!report) return;
-    const backendOk = format === "pdf" && ["quotation", "invoice", "receipt", "payment"].includes(typeName)
-      ? await exportProfessionalPdf(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`)
-      : false;
-    if (backendOk) return;
-    if (format === "excel") downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
+    if (format === "pdf" && ["quotation", "invoice", "receipt", "payment"].includes(typeName)) {
+      const backendOk = await exportProfessionalPdf(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`);
+      if (!backendOk) notify("PDF not generated", "This document requires the professional export backend to avoid unfinished field/value PDF output.", "error");
+      return;
+    }
+    if (format === "excel") {
+      const backendExcel = await exportProfessionalExcel(report, `${report.title}.xlsx`);
+      if (backendExcel) return;
+      downloadExcelLike(`${report.title}.xls`, report.title, report.headers, report.rows);
+    }
     else downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
+  }
+
+  async function exportProfessionalExcel(report, filename) {
+    try {
+      const blob = await exportReportExcel({
+        report: {
+          title: report.title,
+          headers: report.headers,
+          rows: report.rows,
+          generatedAt: new Date().toISOString(),
+        },
+        context: exportContext(),
+        filename,
+      });
+      downloadBlob(blob, filename);
+      notify("Excel report ready", "Generated a formatted workbook with office-ready headings, filters, frozen headers, and totals.", "success");
+      return true;
+    } catch (error) {
+      notify("Using fallback spreadsheet", userMessageForError(error, "export"), "warning");
+      return false;
+    }
   }
 
   async function previewDocument(typeName, id) {
@@ -1963,7 +2007,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
       ? await getProfessionalPdfBlob(typeName === "payment" ? "receipt" : typeName, id, `${report.title}.pdf`)
       : null;
     if (!blob) {
-      downloadPdf(`${report.title}.pdf`, [report.title, "", report.headers.join(" | "), ...report.rows.map((row) => row.join(" | "))]);
+      notify("Preview unavailable", "The professional export backend is required for quotation, invoice, and receipt previews.", "error");
       return;
     }
     const url = URL.createObjectURL(blob);
@@ -1992,8 +2036,7 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
       if (kind === "client-statement") return await exportClientStatementPdf(payload);
       return null;
     } catch (error) {
-      console.info("Export backend unavailable:", error.message);
-      notify("Using fallback export", "The professional export backend is unavailable, so the app will use the browser PDF export for now.", "warning");
+      notify("Professional export unavailable", userMessageForError(error, "export"), "warning");
       return null;
     }
   }
@@ -2708,7 +2751,21 @@ import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, pa
   }
 
   function downloadExcelLike(filename, titleText, headers, rows) {
-    const html = `<html><head><meta charset="utf-8"></head><body><table><tr><th colspan="${headers.length}">${esc(titleText)}</th></tr><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>${rows.map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join("")}</tr>`).join("")}</table></body></html>`;
+    const company = settings().companyProfile;
+    const html = `<html><head><meta charset="utf-8"><style>
+      table{border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px}
+      th,td{border:1px solid #d8dde4;padding:7px 9px;vertical-align:top}
+      .company{font-size:16px;font-weight:700;color:#111111;background:#f5f6f8}
+      .title{font-size:14px;font-weight:700;color:#d71920}
+      .generated{color:#5f6672}
+      .head th{background:#111111;color:#ffffff;font-weight:700}
+    </style></head><body><table>
+      <tr><th class="company" colspan="${headers.length}">${esc(company.name || "Civil-Gineer Masta Proprietary Limited")}</th></tr>
+      <tr><th class="title" colspan="${headers.length}">${esc(titleText)}</th></tr>
+      <tr><td class="generated" colspan="${headers.length}">Generated ${esc(new Date().toLocaleString())}</td></tr>
+      <tr class="head">${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>
+      ${rows.map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join("")}</tr>`).join("")}
+    </table></body></html>`;
     downloadBlob(new Blob([html], { type: "application/vnd.ms-excel" }), filename);
   }
 

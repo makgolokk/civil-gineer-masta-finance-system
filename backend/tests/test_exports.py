@@ -101,3 +101,39 @@ def test_client_statement_export():
         "context": context(),
     }
     assert_pdf_response(client.post("/exports/client-statement", json=payload))
+
+
+def test_generic_invoice_payload_uses_professional_layout():
+    payload = {
+        "documentType": "invoice",
+        "filename": "invoice.pdf",
+        "documentNumber": "INV-ALIAS-1",
+        "issueDate": "2026-05-27",
+        "dueDate": "2026-06-03",
+        "clientName": "Alias Client",
+        "project": "Office fit-out",
+        "location": "Gaborone",
+        "lineItems": [{"description": "Site work", "quantity": 2, "unit": "Hours", "unitPrice": 750}],
+        "vat": 0,
+        "amountPaid": 500,
+        "paymentTerms": "Due within 7 days",
+        "context": context(),
+    }
+    assert_pdf_response(client.post("/api/export/pdf", json=payload))
+
+
+def test_excel_export():
+    payload = {
+        "filename": "report.xlsx",
+        "report": {
+            "title": "Income Statement",
+            "headers": ["Line", "Amount"],
+            "rows": [["Revenue", "BWP 1,200.00"], ["Expenses", "BWP 300.00"]],
+        },
+        "context": context(),
+    }
+    response = client.post("/exports/excel", json=payload)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    assert response.content.startswith(b"PK")
+    assert len(response.content) > 3000

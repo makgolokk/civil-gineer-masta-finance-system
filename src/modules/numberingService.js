@@ -6,7 +6,8 @@ export function periodKey(dateValue = new Date()) {
 }
 
 export function isDevelopmentHost() {
-  return ["localhost", "127.0.0.1", ""].includes(window.location.hostname) || import.meta.env.DEV;
+  const env = import.meta.env || {};
+  return ["localhost", "127.0.0.1", ""].includes(window.location.hostname) || Boolean(env.DEV);
 }
 
 export function previewPeriodCode(state, key, prefix, dateValue = new Date()) {

@@ -6,6 +6,7 @@
     "dev": "vite",
     "start": "vite",
     "build": "vite build",
+    "test": "node --no-warnings --test \"tests/**/*.test.mjs\"",
     "preview": "vite preview",
     "db:push": "supabase db push",
     "db:status": "supabase migration list"

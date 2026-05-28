@@ -151,13 +151,21 @@ function documentAmount(record) {
   return Math.max(0, subtotal - discount + tax);
 }
 
+function requireSupabase() {
+  if (!supabase) {
+    throw new Error("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to use production persistence.");
+  }
+}
+
 async function readTable(table) {
+  requireSupabase();
   const { data, error } = await supabase.from(table).select("*").order("created_at", { ascending: false });
   if (error) throw error;
   return data || [];
 }
 
 async function upsertCollection(collection, records) {
+  requireSupabase();
   const table = allCollectionTables[collection];
   if (!table) return;
   const rows = (records || []).filter((record) => record.id).map((record) => tablePayload(collection, record));
