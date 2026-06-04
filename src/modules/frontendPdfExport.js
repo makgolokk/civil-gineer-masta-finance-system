@@ -3,7 +3,7 @@ import { asText, dateTimeValue, moneyValue, safeFilename, titleCase } from "./ex
 import { templateForPayload } from "./documentTemplates.js";
 import { validatePdfBlob } from "./exportValidation.js";
 
-let cachedLogo = null;
+const logoCache = new Map();
 
 async function pdfTools() {
   const [{ jsPDF }, autoTableModule] = await Promise.all([
@@ -13,24 +13,26 @@ async function pdfTools() {
   return { jsPDF, autoTable: autoTableModule.default };
 }
 
-async function logoDataUrl() {
-  if (cachedLogo !== null) return cachedLogo;
-  cachedLogo = "";
-  if (typeof fetch !== "function" || typeof FileReader === "undefined") return cachedLogo;
+async function logoDataUrl(path = "assets/logo.png") {
+  const logoPath = asText(path) || "assets/logo.png";
+  if (logoCache.has(logoPath)) return logoCache.get(logoPath);
+  logoCache.set(logoPath, "");
+  if (typeof fetch !== "function" || typeof FileReader === "undefined") return logoCache.get(logoPath);
   try {
-    const response = await fetch("assets/logo-doc.png");
-    if (!response.ok) return cachedLogo;
+    const response = await fetch(logoPath);
+    if (!response.ok) return logoCache.get(logoPath);
     const blob = await response.blob();
-    cachedLogo = await new Promise((resolve, reject) => {
+    const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
+    logoCache.set(logoPath, dataUrl);
   } catch (error) {
     console.debug("Logo unavailable for local PDF export", error);
   }
-  return cachedLogo;
+  return logoCache.get(logoPath);
 }
 
 function setColor(doc, color, method = "setTextColor") {
@@ -39,7 +41,7 @@ function setColor(doc, color, method = "setTextColor") {
 
 function companyLines(company = {}) {
   const reg = company.registrationNumber || company.regNumber || company.companyRegistration || "";
-  const tax = company.taxNumber || company.vatNumber || company.tin || "";
+  const tax = company.taxVatNumber || company.taxNumber || company.vatNumber || company.tin || "";
   return [
     company.address,
     [company.phone, company.email].filter(Boolean).join(" | "),
@@ -53,7 +55,7 @@ async function addLetterhead(doc, template) {
   doc.rect(0, 0, PDF_LAYOUT.pageWidth, PDF_LAYOUT.topBarHeight, "F");
   setColor(doc, CGM_COLORS.red, "setFillColor");
   doc.rect(0, 30, PDF_LAYOUT.pageWidth, 4, "F");
-  const logo = await logoDataUrl();
+  const logo = await logoDataUrl(company.logoPath);
   if (logo) {
     try {
       doc.addImage(logo, "PNG", 13, 7, 22, 18, undefined, "FAST");
@@ -73,6 +75,12 @@ async function addLetterhead(doc, template) {
   doc.text(template.title, 196, 14, { align: "right" });
   doc.setFontSize(9);
   doc.text(template.number || "", 196, 22, { align: "right" });
+  if (company.letterhead) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    setColor(doc, CGM_COLORS.red);
+    doc.text(asText(company.letterhead).toUpperCase(), 196, 29, { align: "right" });
+  }
   setColor(doc, CGM_COLORS.black);
 }
 

@@ -51,13 +51,18 @@ function addCompanyHeader(sheet, template, columnCount) {
   sheet.getCell(1, 1).value = company.name || "Civil-Gineer Masta Proprietary Limited";
   styleTitle(sheet.getRow(1));
   sheet.mergeCells(2, 1, 2, columnCount);
-  sheet.getCell(2, 1).value = [company.address, company.phone, company.email].filter(Boolean).join(" | ");
+  sheet.getCell(2, 1).value = [company.letterhead, company.address, company.phone, company.email].filter(Boolean).join(" | ");
   sheet.getRow(2).font = { color: { argb: argb(EXCEL_STYLE.muted) } };
   sheet.mergeCells(3, 1, 3, columnCount);
   sheet.getCell(3, 1).value = template.title;
   styleSubtitle(sheet.getRow(3));
   sheet.mergeCells(4, 1, 4, columnCount);
-  sheet.getCell(4, 1).value = `Generated ${dateTimeValue(new Date())}${template.number ? ` | ${template.number}` : ""}`;
+  sheet.getCell(4, 1).value = [
+    `Generated ${dateTimeValue(new Date())}`,
+    template.number,
+    company.registrationNumber ? `Reg: ${company.registrationNumber}` : "",
+    company.taxVatNumber ? `Tax/VAT: ${company.taxVatNumber}` : "",
+  ].filter(Boolean).join(" | ");
   sheet.getRow(4).font = { color: { argb: argb(EXCEL_STYLE.muted) } };
 }
 

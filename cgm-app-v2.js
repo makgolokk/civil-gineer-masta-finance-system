@@ -128,6 +128,11 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
   function userMessageForError(error, area = "general") {
     const raw = String(error?.message || error || "");
     console.info(`CGM ${area} technical detail:`, error);
+    if (/foreign key|_fkey|violates foreign key constraint|projects_client_id|invoices_project_id/i.test(raw)) {
+      if (/quotation/i.test(area)) return "Quotation could not be saved because the linked client or project information is incomplete. Review the quotation details and try again.";
+      if (/invoice|transfer/i.test(area)) return "Invoice could not be completed because the linked client or project record was not saved correctly. Please check the quotation details and try again.";
+      return "This record could not be saved because linked client or project information is incomplete. Please review the details and try again.";
+    }
     if (/fetch|network|failed to fetch|load failed/i.test(raw)) return "The business database or export service could not be reached. Check your connection and try again.";
     if (/duplicate|unique|already exists/i.test(raw)) return "This record number already exists. Refresh the app and try again so a safe new number can be reserved.";
     if (/permission|row level security|rls|unauthorized|403/i.test(raw)) return "Your current login or database permissions do not allow this action.";
@@ -229,6 +234,18 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     return options.wrap === false ? content : `<div class="row-actions">${content}</div>`;
   }
 
+  function restoreState(snapshot) {
+    state = snapshot;
+    isSaving = false;
+    render();
+  }
+
+  async function saveOrRollback(snapshot, audit) {
+    const saved = await save(audit);
+    if (!saved) restoreState(snapshot);
+    return saved;
+  }
+
   function rowAction(className, attrs, icon, label) {
     return `<button class="${className} compact-action" ${attrs} title="${esc(label)}" aria-label="${esc(label)}"><i data-lucide="${icon}"></i><span class="action-text">${esc(label)}</span></button>`;
   }
@@ -240,6 +257,11 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     qsa(".view").forEach((section) => section.classList.toggle("active", section.id === `${view}View`));
     qs("#pageTitle").textContent = title(view);
     qs("#workspaceLabel").textContent = activePortal === "bookkeeping" ? "Front-office bookkeeping" : "Accounting management";
+    const workspacePill = qs("#workspacePill");
+    if (workspacePill) {
+      workspacePill.textContent = activePortal === "bookkeeping" ? "Bookkeeping / Admin" : "Accounting Management";
+      workspacePill.dataset.workspace = activePortal;
+    }
     qs(".sidebar").classList.remove("open");
     render();
   }
@@ -268,12 +290,12 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
   }
 
   function quickActionsForView() {
-    if (activePortal === "bookkeeping" && activeView === "bookDashboard") {
+    if (activePortal === "bookkeeping") {
       return [
-        ["bookQuotations", "New Quote", "file-plus-2"],
-        ["bookInvoices", "New Invoice", "file-text"],
-        ["bookReceipts", "Receipt", "receipt"],
-        ["bookExpenses", "Expense", "wallet-cards"],
+        ["quote", "New Quote", "file-plus-2", "capture"],
+        ["invoice", "New Invoice", "file-text", "capture"],
+        ["receipt", "Receipt", "receipt", "capture"],
+        ["expense", "Expense", "wallet-cards", "capture"],
       ];
     }
     if (activePortal === "management" && activeView === "dashboard") {
@@ -296,7 +318,27 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     fab.hidden = !activePortal || !actions.length;
     fab.classList.toggle("open", quickFabOpen && actions.length > 0);
     toggle.setAttribute("aria-expanded", String(quickFabOpen && actions.length > 0));
-    menu.innerHTML = actions.map(([view, label, icon]) => `<button class="quick-fab-item" data-go-view="${view}"><i data-lucide="${icon}"></i><span>${esc(label)}</span></button>`).join("");
+    menu.innerHTML = actions.map(([target, label, icon, mode]) => `<button class="quick-fab-item" ${mode === "capture" ? `data-book-capture="${target}"` : `data-go-view="${target}"`}><i data-lucide="${icon}"></i><span>${esc(label)}</span></button>`).join("");
+  }
+
+  function openBookkeepingCapture(kind) {
+    const targets = {
+      quote: ["bookQuoteForm", "clientName"],
+      invoice: ["bookInvoiceForm", "clientName"],
+      receipt: ["bookReceiptForm", "invoiceId"],
+      expense: ["bookExpenseForm", "vendor"],
+    };
+    const target = targets[kind];
+    if (!target) return;
+    if (activePortal !== "bookkeeping" || activeView !== "bookDashboard") setView("bookDashboard");
+    setTimeout(() => {
+      const form = qs(`#${target[0]}`);
+      if (!form) return;
+      form.scrollIntoView({ behavior: "smooth", block: "start" });
+      form.classList.add("form-focus-pulse");
+      setTimeout(() => form.classList.remove("form-focus-pulse"), 1200);
+      qs(`[name="${target[1]}"]`, form)?.focus?.();
+    }, 80);
   }
 
   function closeQuickFab() {
@@ -394,11 +436,11 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       <section class="panel">
         <div class="table-head"><div><h2>Growth and trend graphs</h2><p>Rolling monthly view from invoices, receipts, expenses, creditors, suppliers, and ledger-derived profit.</p></div></div>
         <div class="chart-grid">
-          ${barChart("Monthly invoiced amount", d.trends, "invoiced")}
-          ${barChart("Monthly payments received", d.trends, "payments")}
-          ${barChart("Monthly expenses", d.trends, "expenses")}
-          ${barChart("Monthly net cash", d.trends, "netCash")}
-          ${barChart("Monthly profit/loss", d.trends, "profit")}
+          ${barChart("Monthly invoiced amount", d.trends, "invoiced", "positive")}
+          ${barChart("Monthly payments received", d.trends, "payments", "positive")}
+          ${barChart("Monthly expenses", d.trends, "expenses", "negative")}
+          ${barChart("Monthly net cash", d.trends, "netCash", "cash")}
+          ${barChart("Monthly profit/loss", d.trends, "profit", "profit")}
           ${groupedBarChart("Debtors vs creditors", d.trends, "debtors", "creditors")}
           ${lineChart("Cash flow trend", d.trends, "cashBalance")}
         </div>
@@ -551,12 +593,14 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
         <section class="panel">
           <div class="section-head"><div><h2>Create quotation</h2><p>Pick the client, add the work items, then save. Each item carries its service category and the total is calculated for you.</p></div></div>
           <form id="bookQuoteForm" class="form-grid">
-            ${input("clientName", "Client / prospect name", "text", true)}
+            <label class="field full">Existing client / prospect<select name="clientId"><option value="">Use new prospect details below</option>${clientOptions()}</select></label>
+            ${input("clientName", "Client / prospect name", "text", false)}
             ${input("contact", "Contact person")}
             ${input("email", "Email", "email")}
             ${input("phone", "Phone")}
             ${input("date", "Quotation date", "date", true, CGM.today())}
             ${input("validUntil", "Valid until", "date", true, CGM.today())}
+            <label class="field full">Existing project<select name="projectId">${projectOptions()}</select></label>
             ${generatedInput("projectCode", "Project code", suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("bookQuoteItems", "Quotation items")}
@@ -568,11 +612,13 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
         <section class="panel">
           <div class="section-head"><div><h2>Quick invoice</h2><p>Create a client invoice from line items. Service categories on the items post to the correct income account.</p></div></div>
           <form id="bookInvoiceForm" class="form-grid">
-            ${input("clientName", "Client name", "text", true)}
+            <label class="field full">Existing client<select name="clientId"><option value="">Use new client details below</option>${clientOptions()}</select></label>
+            ${input("clientName", "Client name", "text", false)}
             ${input("email", "Client email", "email")}
             ${input("phone", "Client phone")}
             ${input("date", "Invoice date", "date", true, CGM.today())}
             ${input("dueDate", "Due date", "date", true, CGM.today())}
+            <label class="field full">Existing project<select name="projectId">${projectOptions()}</select></label>
             ${generatedInput("projectCode", "Project code", suggestedProjectCode())}
             ${input("projectName", "Project name")}
             ${itemEditor("bookInvoiceItems", "Invoice items")}
@@ -733,11 +779,12 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     return formatMonthName(date);
   }
 
-  function barChart(label, rows, key) {
+  function barChart(label, rows, key, tone = "neutral") {
     const max = Math.max(...rows.map((row) => Math.abs(row[key])), 1);
     return `<article class="chart-card"><h3>${esc(label)}</h3><div class="bar-chart">${rows.map((row) => {
       const height = Math.max(4, Math.round((Math.abs(row[key]) / max) * 96));
-      return `<span title="${esc(row.label)}: ${money.format(row[key])}" class="${row[key] < 0 ? "negative" : ""}" style="height:${height}px"></span>`;
+      const semantic = row[key] < 0 ? "negative" : tone;
+      return `<span title="${esc(row.label)}: ${money.format(row[key])}" class="${esc(semantic)}" style="height:${height}px"></span>`;
     }).join("")}</div><div class="chart-labels">${rows.map((row) => `<small>${esc(row.label.split(" ")[0])}</small>`).join("")}</div></article>`;
   }
 
@@ -747,7 +794,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       const hA = Math.max(4, Math.round((Math.abs(row[keyA]) / max) * 96));
       const hB = Math.max(4, Math.round((Math.abs(row[keyB]) / max) * 96));
       return `<span><i class="series-a" title="Debtors ${money.format(row[keyA])}" style="height:${hA}px"></i><i class="series-b" title="Creditors ${money.format(row[keyB])}" style="height:${hB}px"></i></span>`;
-    }).join("")}</div><p class="muted">Red: debtors | Black: creditors</p></article>`;
+    }).join("")}</div><p class="muted">Red: debtors risk | Gray: creditors</p></article>`;
   }
 
   function lineChart(label, rows, key) {
@@ -760,7 +807,8 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       const y = 112 - ((row[key] - min) / spread) * 92;
       return `${x},${y}`;
     }).join(" ");
-    return `<article class="chart-card"><h3>${esc(label)}</h3><svg class="line-chart" viewBox="0 0 304 128" role="img" aria-label="${esc(label)}"><polyline points="${points}" fill="none" stroke="#d71920" stroke-width="3"/><line x1="8" y1="112" x2="296" y2="112" stroke="#d8dde4"/></svg></article>`;
+    const stroke = values.some((value) => value < 0) ? "#d71920" : "#168a4a";
+    return `<article class="chart-card"><h3>${esc(label)}</h3><svg class="line-chart" viewBox="0 0 304 128" role="img" aria-label="${esc(label)}"><polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="3"/><line x1="8" y1="112" x2="296" y2="112" stroke="#d8dde4"/></svg></article>`;
   }
 
   function renderAccounts() {
@@ -1420,11 +1468,18 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       numberingError("invoice", error);
       return;
     }
-    const project = await findOrCreateProject({ clientId: data.clientId, serviceId, projectCode, projectName: data.projectName });
+    const beforeState = structuredClone(state);
+    let project;
+    try {
+      project = await findOrCreateProject({ clientId: data.clientId, serviceId, projectCode, projectName: data.projectName });
+    } catch (error) {
+      notify("Invoice not saved", userMessageForError(error, "invoice"), "error");
+      return;
+    }
     const service = CGM.serviceById(state, serviceId);
     const invoice = { id: CGM.uid(), number, clientId: data.clientId, date: data.date, dueDate: data.dueDate, serviceId, projectId: project?.id || "", projectCode: project?.code || "", incomeAccountId: service?.incomeAccountId || "sales_income", notes: data.notes, items, discount: defaultDiscount(), taxRate: defaultTaxRate(), status: "issued" };
     state.invoices.unshift(invoice);
-    save({ action: "create", recordType: "invoice", recordId: invoice.number, before: null, after: invoice });
+    if (!(await saveOrRollback(beforeState, { action: "create", recordType: "invoice", recordId: invoice.number, before: null, after: invoice }))) return;
     openPostSaveActions("invoice", invoice);
   }
 
@@ -1450,9 +1505,10 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       numberingError("receipt", error);
       return;
     }
+    const beforeState = structuredClone(state);
     const payment = { ...data, id: CGM.uid(), clientId: invoice?.clientId || "", projectId: invoice?.projectId || "", projectCode: invoice?.projectCode || "", serviceId: invoice?.serviceId || "", amount, receiptNumber, status: "paid" };
     state.payments.unshift(payment);
-    save({ action: "create", recordType: "payment", recordId: payment.receiptNumber, before: null, after: payment });
+    if (!(await saveOrRollback(beforeState, { action: "create", recordType: "payment", recordId: payment.receiptNumber, before: null, after: payment }))) return;
     openPostSaveActions("payment", payment);
   }
 
@@ -1475,9 +1531,10 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       numberingError("expense", error);
       return;
     }
+    const beforeState = structuredClone(state);
     const expense = { ...data, id: CGM.uid(), reference, serviceId, projectCode: projectLabel(data.projectId, ""), amount: CGM.documentTotal({ items }), items, description: data.description || items.map((item) => item.description).join("; "), expenseAccountId: service?.costAccountId || "general_expenses", paymentMethod: "Paid", status: "paid" };
     state.expenses.unshift(expense);
-    save({ action: "create", recordType: "expense", recordId: expense.reference || expense.id, before: null, after: expense });
+    await saveOrRollback(beforeState, { action: "create", recordType: "expense", recordId: expense.reference || expense.id, before: null, after: expense });
   }
 
   async function handleBookQuote(event) {
@@ -1490,25 +1547,49 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       openModal("Quotation not saved", "<p>Add at least one quotation item with description, quantity, and rate.</p>");
       return;
     }
+    let selectedClient = data.clientId ? state.clients.find((client) => client.id === data.clientId) : null;
+    const selectedProject = data.projectId ? state.projects.find((project) => project.id === data.projectId) : null;
+    if (data.clientId && !selectedClient) {
+      openModal("Quotation not saved", "<p>Select a valid existing client or enter new prospect details.</p>");
+      return;
+    }
+    if (data.projectId && !selectedProject) {
+      openModal("Quotation not saved", "<p>Select a valid existing project or use the generated project code for a new project.</p>");
+      return;
+    }
+    if (selectedProject?.clientId) {
+      const projectClient = state.clients.find((client) => client.id === selectedProject.clientId);
+      if (selectedClient && selectedClient.id !== selectedProject.clientId) {
+        openModal("Quotation not saved", "<p>The selected project belongs to a different client. Choose the matching client or create a new project.</p>");
+        return;
+      }
+      if (!selectedClient && projectClient) selectedClient = projectClient;
+    }
+    if (!selectedClient && !String(data.clientName || "").trim()) {
+      openModal("Quotation not saved", "<p>Choose an existing client or enter a client/prospect name.</p>");
+      return;
+    }
     let number;
     let projectCode;
     try {
       number = await officialNumber("quotation", docPrefix("quotationPrefix", "QT"), state.quotations, "number", "quotation number");
-      projectCode = await reserveProjectCode(data.projectCode);
+      projectCode = selectedProject?.code || await reserveProjectCode(data.projectCode);
     } catch (error) {
       numberingError("quotation", error);
       return;
     }
+    const beforeState = structuredClone(state);
     const quote = {
       id: CGM.uid(),
       number,
-      clientId: "",
-      clientSnapshot: clientSnapshotFromEntry(data),
+      clientId: selectedClient?.id || "",
+      clientSnapshot: selectedClient || clientSnapshotFromEntry(data),
       date: data.date,
       validUntil: data.validUntil,
       serviceId: items[0]?.serviceId || data.serviceId,
+      projectId: selectedProject?.id || "",
       projectCode,
-      projectName: data.projectName,
+      projectName: selectedProject?.name || data.projectName,
       status: "draft",
       notes: data.notes,
       items,
@@ -1517,7 +1598,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       source: "bookkeeping",
     };
     state.quotations.unshift(quote);
-    save({ action: "create-draft", recordType: "quotation", recordId: quote.number, before: null, after: quote });
+    if (!(await saveOrRollback(beforeState, { action: "create-draft", recordType: "quotation", recordId: quote.number, before: null, after: quote }))) return;
     openPostSaveActions("quotation", quote);
   }
 
@@ -1531,19 +1612,50 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       openModal("Invoice not saved", "<p>Add at least one invoice item with description, quantity, and rate.</p>");
       return;
     }
+    const beforeState = structuredClone(state);
     let client;
     const serviceId = items[0]?.serviceId || data.serviceId;
     let number;
     let projectCode;
+    let selectedClient = data.clientId ? state.clients.find((client) => client.id === data.clientId) : null;
+    const selectedProject = data.projectId ? state.projects.find((project) => project.id === data.projectId) : null;
+    if (data.clientId && !selectedClient) {
+      openModal("Invoice not saved", "<p>Select a valid existing client or enter new client details.</p>");
+      return;
+    }
+    if (data.projectId && !selectedProject) {
+      openModal("Invoice not saved", "<p>Select a valid existing project or use the generated project code for a new project.</p>");
+      return;
+    }
+    if (selectedProject?.clientId) {
+      const projectClient = state.clients.find((client) => client.id === selectedProject.clientId);
+      if (selectedClient && selectedClient.id !== selectedProject.clientId) {
+        openModal("Invoice not saved", "<p>The selected project belongs to a different client. Choose the matching client or create a new project.</p>");
+        return;
+      }
+      if (!selectedClient && projectClient) selectedClient = projectClient;
+    }
+    if (!selectedClient && !String(data.clientName || "").trim()) {
+      openModal("Invoice not saved", "<p>Choose an existing client or enter a client name.</p>");
+      return;
+    }
     try {
-      client = await findOrCreateClient(clientSnapshotFromEntry(data));
+      client = selectedClient || await findOrCreateClient(clientSnapshotFromEntry(data));
       number = await officialNumber("invoice", docPrefix("invoicePrefix", "INV"), state.invoices, "number", "invoice number");
-      projectCode = await reserveProjectCode(data.projectCode);
+      projectCode = selectedProject?.code || await reserveProjectCode(data.projectCode);
     } catch (error) {
+      restoreState(beforeState);
       numberingError("invoice", error);
       return;
     }
-    const project = await findOrCreateProject({ clientId: client.id, serviceId, projectCode, projectName: data.projectName });
+    let project;
+    try {
+      project = selectedProject || await findOrCreateProject({ clientId: client.id, serviceId, projectCode, projectName: data.projectName });
+    } catch (error) {
+      restoreState(beforeState);
+      notify("Invoice not saved", userMessageForError(error, "invoice"), "error");
+      return;
+    }
     const service = CGM.serviceById(state, serviceId);
     const invoice = {
       id: CGM.uid(),
@@ -1563,7 +1675,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       source: "bookkeeping",
     };
     state.invoices.unshift(invoice);
-    save({ action: "create", recordType: "invoice", recordId: invoice.number, before: null, after: invoice });
+    if (!(await saveOrRollback(beforeState, { action: "create", recordType: "invoice", recordId: invoice.number, before: null, after: invoice }))) return;
     openPostSaveActions("invoice", invoice);
   }
 
@@ -1586,6 +1698,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       numberingError("receipt", error);
       return;
     }
+    const beforeState = structuredClone(state);
     const payment = {
       ...data,
       id: CGM.uid(),
@@ -1599,7 +1712,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       source: "bookkeeping",
     };
     state.payments.unshift(payment);
-    save({ action: "create", recordType: "payment", recordId: payment.receiptNumber, before: null, after: payment });
+    if (!(await saveOrRollback(beforeState, { action: "create", recordType: "payment", recordId: payment.receiptNumber, before: null, after: payment }))) return;
     openPostSaveActions("payment", payment);
   }
 
@@ -1622,9 +1735,10 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       numberingError("expense", error);
       return;
     }
+    const beforeState = structuredClone(state);
     const expense = { ...data, id: CGM.uid(), reference, serviceId, projectCode: projectLabel(data.projectId, ""), amount: CGM.documentTotal({ items }), items, description: data.description || items.map((item) => item.description).join("; "), expenseAccountId: service?.costAccountId || "general_expenses", paymentMethod: "Paid", status: "paid", source: "bookkeeping" };
     state.expenses.unshift(expense);
-    save({ action: "create", recordType: "expense", recordId: expense.reference || expense.id, before: null, after: expense });
+    await saveOrRollback(beforeState, { action: "create", recordType: "expense", recordId: expense.reference || expense.id, before: null, after: expense });
   }
 
   async function handleBookSupplierBill(event) {
@@ -1784,6 +1898,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       openModal("Approval required", "<p>Approve the quotation before transferring it to an invoice.</p>");
       return;
     }
+    const beforeState = structuredClone(state);
     let client;
     let project;
     let number;
@@ -1791,12 +1906,15 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       client = quote.clientId
         ? state.clients.find((item) => item.id === quote.clientId)
         : await findOrCreateClient(quote.clientSnapshot || { name: quotationClientName(quote) });
+      if (!client) throw new Error("Linked quotation client was not found.");
       project = quote.projectId
         ? state.projects.find((item) => item.id === quote.projectId)
         : await findOrCreateProject({ clientId: client.id, serviceId: quote.serviceId, projectCode: quote.projectCode, projectName: quote.projectName || quote.items?.[0]?.description });
+      if (quote.projectId && !project) throw new Error("Linked quotation project was not found.");
       number = await officialNumber("invoice", docPrefix("invoicePrefix", "INV"), state.invoices, "number", "invoice number");
     } catch (error) {
-      numberingError("invoice", error);
+      restoreState(beforeState);
+      notify("Invoice not created", userMessageForError(error, "transfer"), "error");
       return;
     }
     const service = CGM.serviceById(state, quote.serviceId);
@@ -1820,7 +1938,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     };
     state.invoices.unshift(invoice);
     state.quotations = state.quotations.map((item) => (item.id === id ? { ...item, status: "invoiced", clientId: client.id, projectId: project?.id || "", projectCode: project?.code || quote.projectCode || "", invoiceId: invoice.id } : item));
-    save({ action: "transfer-to-invoice", recordType: "quotation", recordId: quote.number, before: quote, after: { quote: state.quotations.find((item) => item.id === id), invoice }, reason: "Approved quotation converted to invoice" });
+    await saveOrRollback(beforeState, { action: "transfer-to-invoice", recordType: "quotation", recordId: quote.number, before: quote, after: { quote: state.quotations.find((item) => item.id === id), invoice }, reason: "Approved quotation converted to invoice" });
   }
 
   async function findOrCreateClient(snapshot) {
@@ -1854,14 +1972,24 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
   async function findOrCreateProject({ clientId, serviceId, projectCode, projectName }) {
     const cleanCode = String(projectCode || "").trim();
     const existing = state.projects.find((project) => cleanCode && String(project.code).toLowerCase() === cleanCode.toLowerCase());
-    if (existing) return existing;
+    const validClient = clientId ? state.clients.find((client) => client.id === clientId) : null;
+    if (clientId && !validClient) {
+      throw new Error("Project could not be linked because the selected client record does not exist.");
+    }
+    if (existing) {
+      if (validClient && existing.clientId && existing.clientId !== validClient.id) {
+        throw new Error("This project code already belongs to a different client. Use a new project code for this client's project.");
+      }
+      if (validClient && !existing.clientId) existing.clientId = validClient.id;
+      return existing;
+    }
     if (!cleanCode && !projectName) return null;
     const code = cleanCode || await officialNumber("projectCode", "PRJ", state.projects, "code", "project code", { period: periodKey(CGM.today()) });
     const project = {
       id: CGM.uid(),
       code,
       name: projectName || cleanCode || "Unnamed project",
-      clientId: clientId || "",
+      clientId: validClient?.id || "",
       serviceId: serviceId || "",
       status: "active",
       createdAt: CGM.today(),
@@ -2824,6 +2952,12 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       auditFilters = { action: "", module: "", fromDate: "", toDate: "" };
       renderAudit();
       if (window.lucide) lucide.createIcons();
+    }
+    if (button.dataset.bookCapture) {
+      closeModal();
+      closeQuickFab();
+      openBookkeepingCapture(button.dataset.bookCapture);
+      return;
     }
     if (button.dataset.goView) {
       closeModal();

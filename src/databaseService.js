@@ -20,6 +20,21 @@ const optionalCollectionTables = {
 };
 
 const allCollectionTables = { ...collectionTables, ...optionalCollectionTables };
+const saveOrder = [
+  "clients",
+  "suppliers",
+  "projects",
+  "quotations",
+  "invoices",
+  "payments",
+  "expenses",
+  "supplierBills",
+  "supplierPayments",
+  "journalEntries",
+  "cashTransactions",
+  "users",
+  "auditLog",
+];
 
 function camelFromRow(row) {
   return {
@@ -32,6 +47,11 @@ function camelFromRow(row) {
 
 function basePayload(record) {
   return { ...record, updatedAt: new Date().toISOString() };
+}
+
+function fk(value) {
+  const text = String(value || "").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text) ? text : null;
 }
 
 function tablePayload(collection, record) {
@@ -65,7 +85,7 @@ function tablePayload(collection, record) {
   if (collection === "projects") {
     return {
       ...common,
-      client_id: record.clientId || null,
+      client_id: fk(record.clientId),
       code: record.code || record.projectCode || "",
       name: record.name || record.projectName || "",
     };
@@ -74,8 +94,8 @@ function tablePayload(collection, record) {
   if (collection === "quotations" || collection === "invoices") {
     const row = {
       ...common,
-      client_id: record.clientId || null,
-      project_id: record.projectId || null,
+      client_id: fk(record.clientId),
+      project_id: fk(record.projectId),
       number: record.number || "",
       document_date: record.date || null,
       amount: documentAmount(record),
@@ -90,9 +110,9 @@ function tablePayload(collection, record) {
   if (collection === "payments") {
     return {
       ...common,
-      invoice_id: record.invoiceId || null,
-      client_id: record.clientId || null,
-      project_id: record.projectId || null,
+      invoice_id: fk(record.invoiceId),
+      client_id: fk(record.clientId),
+      project_id: fk(record.projectId),
       receipt_number: record.receiptNumber || "",
       payment_date: record.date || null,
       amount: Number(record.amount || 0),
@@ -102,7 +122,7 @@ function tablePayload(collection, record) {
   if (collection === "expenses") {
     return {
       ...common,
-      project_id: record.projectId || null,
+      project_id: fk(record.projectId),
       reference: record.reference || "",
       expense_date: record.date || null,
       category: record.category || "",
@@ -114,8 +134,8 @@ function tablePayload(collection, record) {
   if (collection === "supplierBills") {
     return {
       ...common,
-      supplier_id: record.supplierId || null,
-      project_id: record.projectId || null,
+      supplier_id: fk(record.supplierId),
+      project_id: fk(record.projectId),
       number: record.number || "",
       bill_date: record.date || null,
       due_date: record.dueDate || null,
@@ -126,8 +146,8 @@ function tablePayload(collection, record) {
   if (collection === "supplierPayments") {
     return {
       ...common,
-      supplier_id: record.supplierId || null,
-      bill_id: record.billId || null,
+      supplier_id: fk(record.supplierId),
+      bill_id: fk(record.billId),
       reference: record.reference || "",
       payment_date: record.date || null,
       amount: Number(record.amount || 0),
@@ -238,7 +258,9 @@ export const databaseService = {
   },
 
   async saveState(state) {
-    await Promise.all(Object.keys(allCollectionTables).map((collection) => upsertCollection(collection, state[collection] || [])));
+    for (const collection of saveOrder) {
+      await upsertCollection(collection, state[collection] || []);
+    }
     const { error } = await supabase.from("company_settings").upsert({
       id: "default",
       company_name: state.company?.name || state.settings?.companyProfile?.name || "",
