@@ -13,26 +13,51 @@ async function pdfTools() {
   return { jsPDF, autoTable: autoTableModule.default };
 }
 
-async function logoDataUrl(path = "assets/logo.png") {
-  const logoPath = asText(path) || "assets/logo.png";
-  if (logoCache.has(logoPath)) return logoCache.get(logoPath);
-  logoCache.set(logoPath, "");
-  if (typeof fetch !== "function" || typeof FileReader === "undefined") return logoCache.get(logoPath);
-  try {
-    const response = await fetch(logoPath);
-    if (!response.ok) return logoCache.get(logoPath);
-    const blob = await response.blob();
-    const dataUrl = await new Promise((resolve, reject) => {
+function logoCandidates(path = "/logo.png") {
+  const requested = asText(path) || "/logo.png";
+  const isDefaultLogo = requested === "/logo.png" || requested === "assets/logo.png" || requested === "/assets/logo.png";
+  const candidates = [
+    isDefaultLogo ? "/logo-doc.png" : "",
+    requested,
+    requested === "assets/logo.png" || requested === "/assets/logo.png" ? "/logo.png" : "",
+    requested === "assets/logo-doc.png" || requested === "/assets/logo-doc.png" ? "/logo-doc.png" : "",
+    isDefaultLogo ? "" : "/logo-doc.png",
+    "/logo.png",
+  ].filter(Boolean);
+  return [...new Set(candidates)];
+}
+
+async function logoDataUrl(path = "/logo.png") {
+  const cacheKey = logoCandidates(path).join("|");
+  if (logoCache.has(cacheKey)) return logoCache.get(cacheKey);
+  logoCache.set(cacheKey, "");
+  if (typeof fetch !== "function") return logoCache.get(cacheKey);
+  for (const logoPath of logoCandidates(path)) {
+    try {
+      const response = await fetch(logoPath);
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      const dataUrl = await blobToDataUrl(blob);
+      logoCache.set(cacheKey, dataUrl);
+      return dataUrl;
+    } catch (error) {
+      console.debug("Logo unavailable for local PDF export", logoPath, error);
+    }
+  }
+  return logoCache.get(cacheKey);
+}
+
+async function blobToDataUrl(blob) {
+  if (typeof FileReader !== "undefined") {
+    return await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
-    logoCache.set(logoPath, dataUrl);
-  } catch (error) {
-    console.debug("Logo unavailable for local PDF export", error);
   }
-  return logoCache.get(logoPath);
+  const bytes = Buffer.from(await blob.arrayBuffer());
+  return `data:${blob.type || "image/png"};base64,${bytes.toString("base64")}`;
 }
 
 function setColor(doc, color, method = "setTextColor") {
@@ -60,7 +85,8 @@ async function addLetterhead(doc, template) {
   const logo = await logoDataUrl(company.logoPath);
   if (logo) {
     try {
-      doc.addImage(logo, "PNG", 13, 7, 22, 18, undefined, "FAST");
+      const format = /^data:image\/jpe?g/i.test(logo) ? "JPEG" : "PNG";
+      doc.addImage(logo, format, 13, 7, 22, 18, undefined, "FAST");
     } catch (error) {
       console.debug("Logo could not be embedded in local PDF export", error);
     }

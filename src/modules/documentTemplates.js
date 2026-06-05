@@ -5,11 +5,19 @@ export function exportCurrency(context = {}) {
 }
 
 export function companyProfile(context = {}) {
-  return context.settings?.companyProfile || {};
+  const profile = context.settings?.companyProfile || {};
+  return { ...profile, logoPath: normalizeLogoPath(profile.logoPath) };
 }
 
 export function documentSettings(context = {}) {
   return context.settings?.documentSettings || {};
+}
+
+export function normalizeLogoPath(value = "") {
+  const path = asText(value);
+  if (!path || path === "assets/logo.png" || path === "/assets/logo.png") return "/logo.png";
+  if (path === "assets/logo-doc.png" || path === "/assets/logo-doc.png") return "/logo-doc.png";
+  return path;
 }
 
 export function bankingRows(company = {}) {

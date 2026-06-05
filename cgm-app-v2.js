@@ -1310,7 +1310,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     company.alternatePhone = data["company.alternatePhone"];
     company.email = data["company.email"];
     company.website = data["company.website"];
-    company.logoPath = data["company.logoPath"] || "assets/logo.png";
+    company.logoPath = normalizeLogoPath(data["company.logoPath"]);
     company.letterhead = data["company.letterhead"];
     company.address = data["company.address"];
     company.defaultNotes = data["company.defaultNotes"];
@@ -1406,6 +1406,12 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
 
   function linesFromTextarea(value) {
     return String(value || "").split(/\r?\n|,/).map((line) => line.trim()).filter(Boolean);
+  }
+
+  function normalizeLogoPath(value) {
+    const path = String(value || "").trim();
+    if (!path || path === "assets/logo.png" || path === "/assets/logo.png") return "/logo.png";
+    return path;
   }
 
   async function handleClient(event) {

@@ -68,7 +68,7 @@
         alternatePhone: "+267 77008234",
         email: "makgolokk@outlook.com",
         website: "",
-        logoPath: "assets/logo.png",
+        logoPath: "/logo.png",
         letterhead: "BUILDING THE FUTURE, MASTERING THE PRESENT",
         footerText: "Thank you for your business.",
         defaultNotes: "Council fees, printing, copying, plotting, and any additional services outside the agreed scope may be billed separately.",
@@ -282,10 +282,14 @@
 
   function mergeSettings(settings = {}) {
     const defaults = defaultSettings();
+    const companyProfile = { ...defaults.companyProfile, ...(settings.companyProfile || {}) };
+    if (!companyProfile.logoPath || companyProfile.logoPath === "assets/logo.png" || companyProfile.logoPath === "/assets/logo.png") {
+      companyProfile.logoPath = defaults.companyProfile.logoPath;
+    }
     return {
       ...defaults,
       ...settings,
-      companyProfile: { ...defaults.companyProfile, ...(settings.companyProfile || {}) },
+      companyProfile,
       documentSettings: { ...defaults.documentSettings, ...(settings.documentSettings || {}) },
       presets: { ...defaults.presets, ...(settings.presets || {}) },
       preferences: { ...defaults.preferences, ...(settings.preferences || {}) },

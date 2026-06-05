@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildFallbackPdfBlob } from "../src/modules/pdfFallback.js";
 import { buildFrontendExcelBlob } from "../src/modules/frontendExcelExport.js";
@@ -53,10 +54,27 @@ const quotationPayload = {
   },
 };
 
+async function withMockedLogoFetch(callback) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path === "/logo-doc.png" || path === "/logo.png") {
+      const file = await readFile(path === "/logo-doc.png" ? "./public/logo-doc.png" : "./public/logo.png");
+      return new Response(file, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
+    return originalFetch(url);
+  };
+  try {
+    return await callback();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 test("shared document template carries Settings branding and financial blocks", () => {
   const template = templateForPayload("quotation", quotationPayload);
 
-  assert.equal(template.company.logoPath, "assets/logo.png");
+  assert.equal(template.company.logoPath, "/logo.png");
   assert.equal(template.tagline, "BUILDING THE FUTURE, MASTERING THE PRESENT");
   assert.ok(template.companyLines.includes("+267 7000 0000 / +267 7111 1111"));
   assert.equal(template.terms, "Configured payment terms from Settings.");
@@ -73,12 +91,14 @@ test("shared document template carries Settings branding and financial blocks", 
 });
 
 test("browser fallback generates a usable quotation PDF blob", async () => {
-  const blob = await buildFallbackPdfBlob("quotation", quotationPayload);
+  const blob = await withMockedLogoFetch(() => buildFallbackPdfBlob("quotation", quotationPayload));
 
   assert.equal(blob.type, "application/pdf");
   assert.ok(blob.size > 1000);
   const header = await blob.slice(0, 5).text();
   assert.equal(header, "%PDF-");
+  const pdfText = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  assert.match(pdfText, /\/Subtype\s*\/Image/);
 });
 
 test("document Excel fallback includes Settings banking and approval blocks", async () => {

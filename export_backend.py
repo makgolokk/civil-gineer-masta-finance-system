@@ -39,7 +39,7 @@ COMPANY = {
     "email": "makgolokk@outlook.com",
     "terms": "Payment due strictly as per agreed milestones or due date stated on the document.",
     "notes": "Council fees, printing, copying, plotting, and any additional services outside the agreed scope may be billed separately.",
-    "logoPath": "assets/logo.png",
+    "logoPath": "/logo.png",
     "bank": "FNB / RMB",
     "accountHolder": "Civil-Gineer Masta (Pty) Ltd",
     "accountType": "Business Cheque Account",
@@ -93,7 +93,7 @@ def company_from_data(data):
         "footerText": profile.get("footerText") or company.get("notes") or "",
         "terms": profile.get("defaultTerms") or doc_settings.get("defaultPaymentTerms") or company["terms"],
         "notes": profile.get("defaultNotes") or company["notes"],
-        "logoPath": profile.get("logoPath") or company["logoPath"],
+        "logoPath": normalize_logo_path(profile.get("logoPath") or company["logoPath"]),
         "bank": bank.get("bank") or company["bank"],
         "accountHolder": bank.get("accountHolder") or company["accountHolder"],
         "accountType": bank.get("accountType") or company["accountType"],
@@ -111,6 +111,32 @@ def data_from_payload(payload):
     if payload.get("context") and not data.get("settings"):
         data = dict(payload.get("context") or {})
     return data
+
+
+def normalize_logo_path(value):
+    path = str(value or "").strip()
+    if not path or path in ["assets/logo.png", "/assets/logo.png"]:
+        return "/logo.png"
+    if path in ["assets/logo-doc.png", "/assets/logo-doc.png"]:
+        return "/logo-doc.png"
+    return path
+
+
+def logo_file_candidates(value):
+    path = normalize_logo_path(value)
+    root = Path(__file__).resolve().parent
+    candidates = []
+    if path.endswith("logo.png"):
+        candidates.append(root / "public" / "logo-doc.png")
+        candidates.append(root / "assets" / "logo-doc.png")
+    if path.startswith("/"):
+        candidates.append(root / "public" / path.lstrip("/"))
+        candidates.append(root / path.lstrip("/"))
+    else:
+        candidates.append(root / path)
+    candidates.append(root / "public" / "logo.png")
+    candidates.append(root / "assets" / "logo.png")
+    return candidates
 
 
 def invoice_paid(data, invoice_id):
@@ -293,9 +319,10 @@ def rich(text, style):
 def brand_header(title, number, styles, data=None):
     company = company_from_data(data)
     try:
-        logo_path = Path(company["logoPath"])
-        doc_logo = logo_path.with_name("logo-doc.png") if logo_path.name == "logo.png" else logo_path
-        logo = Image(str(doc_logo if doc_logo.exists() else logo_path), width=48 * mm, height=28 * mm)
+        logo_path = next((candidate for candidate in logo_file_candidates(company["logoPath"]) if candidate.exists()), None)
+        if not logo_path:
+            raise FileNotFoundError(company["logoPath"])
+        logo = Image(str(logo_path), width=48 * mm, height=28 * mm)
     except Exception:
         logo = rich(f"<b>{escape(company['name'])}</b>", styles["Normal"])
     title_block = [
