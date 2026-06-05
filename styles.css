@@ -1438,9 +1438,11 @@ tbody tr:hover {
 }
 
 .professional-doc .doc-brand img {
-  width: 96px;
-  height: 68px;
+  width: 108px;
+  height: 72px;
   object-fit: contain;
+  padding: 4px;
+  background: #fff;
 }
 
 .professional-doc .doc-title {
@@ -1460,6 +1462,14 @@ tbody tr:hover {
   font-weight: 900;
   color: var(--red-dark);
   letter-spacing: 0;
+  width: fit-content;
+  max-width: 100%;
+  margin: 12px auto 16px;
+  padding: 7px 18px;
+  border: 1px solid rgba(215, 25, 32, 0.28);
+  border-radius: 999px;
+  background: #fff7f7;
+  font-size: var(--text-sm);
 }
 
 .doc-meta,

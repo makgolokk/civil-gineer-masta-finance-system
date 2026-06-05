@@ -305,6 +305,17 @@ def stylesheet():
             alignment=1,
         )
     )
+    styles.add(
+        ParagraphStyle(
+            name="Tagline",
+            parent=styles["Normal"],
+            fontSize=8,
+            leading=10,
+            fontName="Helvetica-Bold",
+            textColor=colors.HexColor(f"#{RED}"),
+            alignment=1,
+        )
+    )
     return styles
 
 
@@ -322,12 +333,12 @@ def brand_header(title, number, styles, data=None):
         logo_path = next((candidate for candidate in logo_file_candidates(company["logoPath"]) if candidate.exists()), None)
         if not logo_path:
             raise FileNotFoundError(company["logoPath"])
-        logo = Image(str(logo_path), width=48 * mm, height=28 * mm)
+        logo = Image(str(logo_path), width=42 * mm, height=28 * mm)
     except Exception:
         logo = rich(f"<b>{escape(company['name'])}</b>", styles["Normal"])
     title_block = [
         rich(f"<font size='7' color='#{MUTED}'><b>CLIENT DOCUMENT</b></font>", styles["DocNumber"]),
-        rich(f"<font size='26' color='#{RED}'><b>{escape(title.upper())}</b></font>", styles["Normal"]),
+        rich(f"<font size='23' color='#{RED}'><b>{escape(title.upper())}</b></font>", styles["Normal"]),
         rich(f"<font color='#{BLACK}'><b>No. {escape(str(number or 'Draft'))}</b></font>", styles["DocNumber"]),
     ]
     contact = f"{company['address']}<br/>{company['phone']}<br/>{company['email']}"
@@ -335,20 +346,27 @@ def brand_header(title, number, styles, data=None):
         [
             [
                 logo,
-                rich(f"<font size='12'><b>{escape(company['name'])}</b></font><br/><font color='#{RED}'><b>{escape(company['subtitle'])}</b></font><br/><font size='8' color='#{MUTED}'>{contact}</font>", styles["Normal"]),
+                rich(f"<font size='12'><b>{escape(company['name'])}</b></font><br/><font size='8' color='#{MUTED}'>{contact}</font>", styles["Normal"]),
                 title_block,
             ],
+            [rich("", styles["Normal"]), rich(f"<b>{escape(company['subtitle'].upper())}</b>", styles["Tagline"]), rich("", styles["Normal"])],
         ],
-        colWidths=[50 * mm, 82 * mm, 38 * mm],
+        colWidths=[46 * mm, 84 * mm, 40 * mm],
         style=[
             ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-            ("LINEBELOW", (0, 0), (-1, -1), 2.2, colors.HexColor(f"#{RED}")),
+            ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#FFF7F7")),
+            ("SPAN", (0, 1), (-1, 1)),
+            ("BOX", (0, 1), (-1, 1), 0.45, colors.HexColor("#F4C9CC")),
+            ("LINEABOVE", (0, 0), (-1, 0), 2.2, colors.HexColor(f"#{BLACK}")),
+            ("LINEBELOW", (0, 1), (-1, 1), 2.2, colors.HexColor(f"#{RED}")),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (2, 0), (2, 0), "RIGHT"),
             ("LEFTPADDING", (0, 0), (-1, -1), 0),
             ("RIGHTPADDING", (0, 0), (-1, -1), 0),
             ("TOPPADDING", (0, 0), (-1, -1), 0),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 1), (-1, 1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
+            ("BOTTOMPADDING", (0, 1), (-1, 1), 4),
         ],
     )
 

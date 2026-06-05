@@ -78,36 +78,47 @@ function fallbackCompanyLines(company = {}) {
 
 async function addLetterhead(doc, template) {
   const company = template.company || {};
+  setColor(doc, CGM_COLORS.white, "setFillColor");
+  doc.rect(0, 0, PDF_LAYOUT.pageWidth, PDF_LAYOUT.topBarHeight + 6, "F");
   setColor(doc, CGM_COLORS.black, "setFillColor");
-  doc.rect(0, 0, PDF_LAYOUT.pageWidth, PDF_LAYOUT.topBarHeight, "F");
+  doc.rect(0, 0, PDF_LAYOUT.pageWidth, 3, "F");
   setColor(doc, CGM_COLORS.red, "setFillColor");
-  doc.rect(0, 30, PDF_LAYOUT.pageWidth, 4, "F");
+  doc.rect(0, 36, PDF_LAYOUT.pageWidth, 3, "F");
   const logo = await logoDataUrl(company.logoPath);
   if (logo) {
     try {
       const format = /^data:image\/jpe?g/i.test(logo) ? "JPEG" : "PNG";
-      doc.addImage(logo, format, 13, 7, 22, 18, undefined, "FAST");
+      doc.addImage(logo, format, 14, 7, 33, 22, undefined, "FAST");
     } catch (error) {
       console.debug("Logo could not be embedded in local PDF export", error);
     }
   }
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  setColor(doc, CGM_COLORS.white);
-  doc.text(company.name || "Civil-Gineer Masta Proprietary Limited", logo ? 39 : 14, 13);
+  doc.setFontSize(13);
+  setColor(doc, CGM_COLORS.black);
+  doc.text(company.name || "Civil-Gineer Masta Proprietary Limited", logo ? 52 : 14, 13);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  (template.companyLines || fallbackCompanyLines(company)).slice(0, 3).forEach((line, index) => doc.text(line, logo ? 39 : 14, 19 + index * 4));
+  doc.setFontSize(7.2);
+  setColor(doc, CGM_COLORS.muted);
+  (template.companyLines || fallbackCompanyLines(company)).slice(0, 4).forEach((line, index) => doc.text(line, logo ? 52 : 14, 18 + index * 3.8));
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(17);
-  doc.text(template.title, 196, 14, { align: "right" });
-  doc.setFontSize(9);
+  doc.setFontSize(18);
+  setColor(doc, CGM_COLORS.red);
+  doc.text(asText(template.title).toUpperCase(), 196, 14, { align: "right" });
+  doc.setFontSize(8.5);
+  setColor(doc, CGM_COLORS.black);
   doc.text(template.number || "", 196, 22, { align: "right" });
   if (template.tagline || company.letterhead) {
+    const tagline = asText(template.tagline || company.letterhead).toUpperCase();
+    const tagWidth = Math.min(118, doc.getTextWidth(tagline) + 10);
+    const tagX = (PDF_LAYOUT.pageWidth - tagWidth) / 2;
+    setColor(doc, CGM_COLORS.paleRed, "setFillColor");
+    setColor(doc, CGM_COLORS.red, "setDrawColor");
+    doc.roundedRect(tagX, 31, tagWidth, 6.5, 1.4, 1.4, "FD");
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7.5);
+    doc.setFontSize(7.2);
     setColor(doc, CGM_COLORS.red);
-    doc.text(asText(template.tagline || company.letterhead).toUpperCase(), 196, 29, { align: "right" });
+    doc.text(tagline, PDF_LAYOUT.pageWidth / 2, 35.6, { align: "center" });
   }
   setColor(doc, CGM_COLORS.black);
 }
