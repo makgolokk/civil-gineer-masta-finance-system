@@ -8,6 +8,37 @@ export function companyProfile(context = {}) {
   return context.settings?.companyProfile || {};
 }
 
+export function documentSettings(context = {}) {
+  return context.settings?.documentSettings || {};
+}
+
+export function bankingRows(company = {}) {
+  const bank = company.bankingDetails || {};
+  return [
+    ["Bank", bank.bank],
+    ["Account Holder", bank.accountHolder],
+    ["Account Type", bank.accountType],
+    ["Account Number", bank.accountNumber],
+    ["Branch", [bank.branchName, bank.branchCode].filter(Boolean).join(" | ")],
+  ].filter(([, value]) => asText(value));
+}
+
+export function companyContactLines(company = {}) {
+  const reg = company.registrationNumber || company.regNumber || company.companyRegistration || "";
+  const tax = company.taxVatNumber || company.taxNumber || company.vatNumber || company.tin || "";
+  return [
+    company.address,
+    [company.phone, company.alternatePhone].filter(Boolean).join(" / "),
+    company.email,
+    company.website,
+    [reg ? `Reg: ${reg}` : "", tax ? `Tax/VAT: ${tax}` : ""].filter(Boolean).join(" | "),
+  ].filter((line) => asText(line));
+}
+
+export function termsText(company = {}, context = {}, document = {}) {
+  return document.paymentTerms || company.defaultTerms || documentSettings(context).defaultPaymentTerms || "Payment due as agreed.";
+}
+
 export function findById(items = [], id = "") {
   return items.find((item) => item.id === id) || null;
 }
@@ -32,6 +63,7 @@ export function buildBusinessDocumentTemplate(kind, payload = {}) {
   const document = payload.document || {};
   const context = payload.context || {};
   const company = companyProfile(context);
+  const docSettings = documentSettings(context);
   const client = clientForDocument(context, document);
   const project = projectForDocument(context, document);
   const currency = exportCurrency(context);
@@ -46,7 +78,9 @@ export function buildBusinessDocumentTemplate(kind, payload = {}) {
   const title = titleCase(kind);
   const number = documentNumber(document, title);
   const vatEnabled = !!context.settings?.documentSettings?.vatEnabled || asNumber(document.taxRate) > 0 || tax > 0;
-  const defaultNotes = company.defaultNotes || company.defaultTerms || "";
+  const defaultNotes = company.defaultNotes || "";
+  const terms = termsText(company, context, document);
+  const bankRows = bankingRows(company);
   return {
     type: "business-document",
     kind,
@@ -54,6 +88,9 @@ export function buildBusinessDocumentTemplate(kind, payload = {}) {
     number,
     filenameTitle: `${title} ${number}`,
     company,
+    companyLines: companyContactLines(company),
+    tagline: company.letterhead || "",
+    footerText: company.footerText || company.defaultNotes || "",
     context,
     currency,
     client: {
@@ -89,15 +126,21 @@ export function buildBusinessDocumentTemplate(kind, payload = {}) {
       ...(paid || balance ? [["Balance due", balance]] : []),
     ],
     notes: [document.notes || defaultNotes, document.exclusions].filter(Boolean),
-    paymentTerms: document.paymentTerms || company.paymentTerms || context.settings?.documentSettings?.defaultPaymentTerms || "Payment due as agreed.",
+    paymentTerms: terms,
+    terms,
     preparedBy: document.preparedBy || company.preparedBy || "",
+    preparedByTitle: company.preparedByTitle || "Prepared by",
     approvedBy: document.approvedBy || company.approvedBy || "",
+    approvedByTitle: company.approvedByTitle || "Approved / Client signature",
     bankingDetails: company.bankingDetails || {},
+    bankingRows: bankRows,
     meta: [
       ["Client", client.name || "Prospective client"],
       ["Project", document.projectName || project.name || document.projectCode || ""],
       ["Date", dateValue(document.date)],
       ["Total", moneyValue(total, currency)],
+      ["Payment terms", terms],
+      ...bankRows.map(([label, value]) => [`Banking - ${label}`, value]),
     ],
   };
 }
@@ -119,6 +162,9 @@ export function buildReceiptTemplate(payload = {}) {
     number,
     filenameTitle: `Receipt ${number}`,
     company,
+    companyLines: companyContactLines(company),
+    tagline: company.letterhead || "",
+    footerText: company.footerText || company.defaultNotes || "",
     context,
     currency,
     client: {
@@ -141,6 +187,14 @@ export function buildReceiptTemplate(payload = {}) {
       ["Total paid", paidTotal],
       ["Balance", Math.max(0, invoiceTotal - paidTotal)],
     ],
+    terms: termsText(company, context, receipt),
+    paymentTerms: termsText(company, context, receipt),
+    preparedBy: receipt.preparedBy || company.preparedBy || "",
+    preparedByTitle: company.preparedByTitle || "Prepared by",
+    approvedBy: receipt.approvedBy || company.approvedBy || "",
+    approvedByTitle: company.approvedByTitle || "Approved / Client signature",
+    bankingDetails: company.bankingDetails || {},
+    bankingRows: bankingRows(company),
     notes: [`Thank you for your payment. This receipt confirms funds recorded against invoice ${invoice.number || receipt.invoiceId || ""}.`],
     meta: [["Client", client.name || ""], ["Date", dateValue(receipt.date)], ["Amount", moneyValue(receipt.amount, currency)]],
   };
@@ -159,6 +213,9 @@ export function buildStatementTemplate(payload = {}) {
     number: statement.statementNumber || client.name || "Statement",
     filenameTitle: `${client.name || "Client"} Statement`,
     company,
+    companyLines: companyContactLines(company),
+    tagline: company.letterhead || "",
+    footerText: company.footerText || company.defaultNotes || "",
     context,
     currency,
     client: {
@@ -177,6 +234,10 @@ export function buildStatementTemplate(payload = {}) {
     headers: ["Date", "Type", "Number", "Debit", "Credit", "Balance"],
     rows: (statement.rows || []).map((row) => [dateValue(row.date), row.type, row.number, asNumber(row.debit), asNumber(row.credit), asNumber(row.balance)]),
     totals: [["Closing balance", asNumber(statement.balance)]],
+    terms: termsText(company, context, statement),
+    paymentTerms: termsText(company, context, statement),
+    bankingDetails: company.bankingDetails || {},
+    bankingRows: bankingRows(company),
     meta: [["Client", client.name || ""], ["Closing balance", moneyValue(statement.balance, currency)]],
   };
 }
@@ -189,6 +250,9 @@ export function buildReportTemplate(report = {}, context = {}, options = {}) {
     number: "",
     filenameTitle: report.title || "Report",
     company: companyProfile(context),
+    companyLines: companyContactLines(companyProfile(context)),
+    tagline: companyProfile(context).letterhead || "",
+    footerText: companyProfile(context).footerText || companyProfile(context).defaultNotes || "",
     context,
     currency: exportCurrency(context),
     headers: report.headers || [],

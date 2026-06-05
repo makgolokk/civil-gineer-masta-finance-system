@@ -78,6 +78,7 @@ def document_total(document):
 def company_from_data(data):
     settings = (data or {}).get("settings", {})
     profile = settings.get("companyProfile", {})
+    doc_settings = settings.get("documentSettings", {})
     bank = profile.get("bankingDetails", {})
     company = dict(COMPANY)
     company.update({
@@ -86,7 +87,11 @@ def company_from_data(data):
         "address": profile.get("address") or company["address"],
         "phone": " / ".join([v for v in [profile.get("phone"), profile.get("alternatePhone")] if v]) or company["phone"],
         "email": profile.get("email") or company["email"],
-        "terms": profile.get("defaultTerms") or company["terms"],
+        "website": profile.get("website") or "",
+        "registrationNumber": profile.get("registrationNumber") or "",
+        "taxVatNumber": profile.get("taxVatNumber") or "",
+        "footerText": profile.get("footerText") or company.get("notes") or "",
+        "terms": profile.get("defaultTerms") or doc_settings.get("defaultPaymentTerms") or company["terms"],
         "notes": profile.get("defaultNotes") or company["notes"],
         "logoPath": profile.get("logoPath") or company["logoPath"],
         "bank": bank.get("bank") or company["bank"],
@@ -99,6 +104,13 @@ def company_from_data(data):
         "approvedBy": profile.get("approvedBy") or company["approvedBy"],
     })
     return company
+
+
+def data_from_payload(payload):
+    data = payload.get("data") or payload.get("context") or {}
+    if payload.get("context") and not data.get("settings"):
+        data = dict(payload.get("context") or {})
+    return data
 
 
 def invoice_paid(data, invoice_id):
@@ -815,6 +827,65 @@ def build_statement_pdf(data, statement_type, party_id):
     return buffer.getvalue()
 
 
+def build_payload_statement_pdf(data, statement):
+    styles = stylesheet()
+    party = statement.get("client") or statement.get("supplier") or {}
+    balance = float(statement.get("balance") or 0)
+    rows = statement.get("rows") or []
+    table_rows = [[p("Date", styles["BoxTitle"]), p("Type", styles["BoxTitle"]), p("Number", styles["BoxTitle"]), p("Debit", styles["BoxTitle"]), p("Credit", styles["BoxTitle"]), p("Balance", styles["BoxTitle"])]]
+    for row in rows:
+        table_rows.append([
+            p(row.get("date", ""), styles["Normal"]),
+            p(row.get("type", ""), styles["Normal"]),
+            p(row.get("number", ""), styles["Normal"]),
+            p(money(row.get("debit", 0)), styles["Normal"]),
+            p(money(row.get("credit", 0)), styles["Normal"]),
+            p(money(row.get("balance", 0)), styles["Normal"]),
+        ])
+    if len(table_rows) == 1:
+        table_rows.append([p("No statement transactions", styles["Normal"]), "", "", "", "", ""])
+    table = Table(table_rows, colWidths=[24 * mm, 34 * mm, 30 * mm, 27 * mm, 27 * mm, 28 * mm], repeatRows=1)
+    table.setStyle(document_table_style())
+    buffer = BytesIO()
+    pdf = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
+    story = [
+        brand_header("Statement of Account", statement.get("statementNumber") or datetime.now().strftime("%Y-%m-%d"), styles, data),
+        Spacer(1, 7 * mm),
+        Table(
+            [[
+                document_party_panel("Account Holder", [
+                    ("Name", party.get("name")),
+                    ("Contact", party.get("contact")),
+                    ("Phone", party.get("phone")),
+                    ("Email", party.get("email")),
+                    ("Address", party.get("address")),
+                ], styles, 84),
+                meta_panel([
+                    ("Statement date", statement.get("toDate") or datetime.now().strftime("%Y-%m-%d")),
+                    ("From", statement.get("fromDate")),
+                    ("To", statement.get("toDate")),
+                    ("Balance", money(balance)),
+                ], styles, 84),
+            ]],
+            colWidths=[84 * mm, 84 * mm],
+            style=[("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)],
+        ),
+        Spacer(1, 8 * mm),
+        rich("<b>Account Activity</b>", styles["SectionTitle"]),
+        table,
+        Spacer(1, 7 * mm),
+        statement_balance_table(balance, styles),
+        Spacer(1, 7 * mm),
+        banking_box(company_from_data(data), styles),
+        Spacer(1, 8 * mm),
+        signature_table(company_from_data(data)),
+        Spacer(1, 5 * mm),
+        rich(f"<font color='#{MUTED}'>{escape(company_from_data(data)['subtitle'])}</font>", styles["Footer"]),
+    ]
+    pdf.build(story)
+    return buffer.getvalue()
+
+
 def report_table(headers, rows, page_width_mm=250):
     clean_headers = [p(header, stylesheet()["BoxTitle"]) for header in headers]
     clean_rows = []
@@ -1140,8 +1211,31 @@ class ExportHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            data = payload.get("data", {})
+            data = data_from_payload(payload)
+            global CURRENCY
+            CURRENCY = data.get("settings", {}).get("documentSettings", {}).get("currency") or CURRENCY
             path = urlparse(self.path).path
+            if path == "/exports/quotation":
+                content = build_document_pdf(data, "quotation", payload.get("document") or {})
+                self._send_file(content, "application/pdf", payload.get("filename") or "quotation.pdf")
+                return
+            if path == "/exports/invoice":
+                content = build_document_pdf(data, "invoice", payload.get("document") or {})
+                self._send_file(content, "application/pdf", payload.get("filename") or "invoice.pdf")
+                return
+            if path == "/exports/receipt":
+                content = build_receipt_pdf(data, payload.get("receipt") or {})
+                self._send_file(content, "application/pdf", payload.get("filename") or "receipt.pdf")
+                return
+            if path == "/exports/client-statement":
+                statement = payload.get("statement") or {}
+                content = build_payload_statement_pdf(data, statement)
+                self._send_file(content, "application/pdf", payload.get("filename") or "statement.pdf")
+                return
+            if path == "/exports/excel":
+                content = build_generic_report_workbook(payload["report"]) if payload.get("report") else build_workbook(data)
+                self._send_file(content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", payload.get("filename") or "cgm-accounting-export.xlsx")
+                return
             if path == "/api/export/pdf":
                 content = self._pdf(payload, data)
                 self._send_file(content, "application/pdf", payload.get("filename") or "cgm-export.pdf")
@@ -1170,6 +1264,8 @@ class ExportHandler(BaseHTTPRequestHandler):
             return build_statement_pdf(data, payload.get("statementType") or "client", item_id)
         if kind == "financial-report":
             return build_report_pdf(data)
+        if kind == "report":
+            return build_generic_report_pdf(payload.get("report", {}), data)
         if kind == "generic-report":
             return build_generic_report_pdf(payload.get("report", {}), data)
         raise ValueError("Unsupported PDF export kind")

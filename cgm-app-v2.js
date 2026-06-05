@@ -9,6 +9,7 @@ import { auditChangeRows, auditOptions, filterAuditEntries, formatAuditValue as 
 import { backupCountRows, backupCounts, backupFilename, createBackupEnvelope, parseBackupText } from "./src/modules/backupRecovery.js";
 import { buildFrontendPdfBlob } from "./src/modules/frontendPdfExport.js";
 import { buildFrontendExcelBlob } from "./src/modules/frontendExcelExport.js";
+import { templateForPayload } from "./src/modules/documentTemplates.js";
 import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidation.js";
 
 (async function () {
@@ -1255,29 +1256,40 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
 
   function documentPreview(doc) {
     const s = settings();
-    const company = s.companyProfile;
-    const bank = company.bankingDetails;
+    const template = templateForPayload("invoice", {
+      context: { settings: { companyProfile: s.companyProfile, documentSettings: s.documentSettings }, clients: [], projects: [], services: [] },
+      document: {
+        number: doc.number,
+        date: CGM.today(),
+        dueDate: defaultDueDate(CGM.today()),
+        projectName: doc.projectName,
+        clientSnapshot: { name: doc.clientName },
+        items: doc.rows.map((row) => ({ description: row[0], qty: CGM.toNumber(row[1]), rate: CGM.toNumber(String(row[2]).replace(/,/g, "")) })),
+        notes: s.companyProfile.defaultNotes,
+        taxRate: s.documentSettings.vatEnabled ? CGM.toNumber(s.documentSettings.vatRate) : 0,
+      },
+    });
     return `<article class="document-preview professional-doc">
       <header>
         <div class="doc-brand">
-          <img src="${esc(company.logoPath)}" alt="Civil-Gineer Masta logo">
-          <div><h3>${esc(company.name)}</h3><p>${esc(company.address)}</p><p>${esc(company.phone)} ${company.alternatePhone ? `/ ${esc(company.alternatePhone)}` : ""} | ${esc(company.email)}</p></div>
+          <img src="${esc(template.company.logoPath)}" alt="Civil-Gineer Masta logo">
+          <div><h3>${esc(template.company.name)}</h3>${template.companyLines.map((line) => `<p>${esc(line)}</p>`).join("")}</div>
         </div>
-        <div class="doc-title"><strong>${esc(doc.title)}</strong><span>${esc(doc.number)}</span></div>
+        <div class="doc-title"><strong>${esc(template.title.toUpperCase())}</strong><span>${esc(template.number)}</span></div>
       </header>
-      <p class="doc-tagline">${esc(company.letterhead)}</p>
+      <p class="doc-tagline">${esc(template.tagline)}</p>
       <div class="doc-meta">
-        <div><span>Bill To</span><strong>${esc(doc.clientName)}</strong></div>
+        <div><span>Bill To</span><strong>${esc(template.client.name)}</strong></div>
         <div><span>Project</span><strong>${esc(doc.projectName)}</strong></div>
         <div><span>Date</span><strong>${formatLongDate(CGM.today())}</strong></div>
       </div>
-      ${miniReportTable("", doc.rows, ["Description", "Qty", "Unit Cost", "Amount"])}
-      <div class="doc-total"><span>Total</span><strong>${money.format(doc.total)}</strong></div>
+      ${miniReportTable("", template.items.map((item) => [item.description, item.service, item.qty, money.format(item.rate), money.format(item.amount)]), ["Description", "Service", "Qty", "Unit Cost", "Amount"])}
+      <div class="doc-total"><span>Total</span><strong>${money.format(template.totals.at(-1)?.[1] || doc.total)}</strong></div>
       <div class="doc-two">
-        <div><h3>Banking Details</h3><p>Bank: ${esc(bank.bank)}<br>Account Holder: ${esc(bank.accountHolder)}<br>Account Type: ${esc(bank.accountType)}<br>Account Number: ${esc(bank.accountNumber)}<br>Branch: ${esc(bank.branchName)} (${esc(bank.branchCode)})</p></div>
-        <div><h3>Terms & Approval</h3><p>${esc(company.defaultTerms)}</p><div class="signature-line">Prepared by: ${esc(company.preparedBy || "")}</div><div class="signature-line">Approved by: ${esc(company.approvedBy || "")}</div></div>
+        <div><h3>Banking Details</h3><p>${template.bankingRows.map(([label, value]) => `${esc(label)}: ${esc(value)}`).join("<br>")}</p></div>
+        <div><h3>Terms & Approval</h3><p>${esc(template.terms)}</p><div class="signature-line">${esc(template.preparedByTitle)}: ${esc(template.preparedBy || "")}</div><div class="signature-line">${esc(template.approvedByTitle)}: ${esc(template.approvedBy || "")}</div></div>
       </div>
-      <footer>${esc(company.footerText)}</footer>
+      <footer>${esc(template.footerText)}</footer>
     </article>`;
   }
 
@@ -2237,6 +2249,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       settings: {
         companyProfile: currentSettings.companyProfile,
         documentSettings: {
+          ...currentSettings.documentSettings,
           currency: currentSettings.documentSettings.currency || "BWP",
           vatEnabled: !!currentSettings.documentSettings.vatEnabled,
           vatRate: CGM.toNumber(currentSettings.documentSettings.vatRate),

@@ -51,7 +51,7 @@ function addCompanyHeader(sheet, template, columnCount) {
   sheet.getCell(1, 1).value = company.name || "Civil-Gineer Masta Proprietary Limited";
   styleTitle(sheet.getRow(1));
   sheet.mergeCells(2, 1, 2, columnCount);
-  sheet.getCell(2, 1).value = [company.letterhead, company.address, company.phone, company.email].filter(Boolean).join(" | ");
+  sheet.getCell(2, 1).value = [template.tagline, ...(template.companyLines || [company.address, company.phone, company.email])].filter(Boolean).join(" | ");
   sheet.getRow(2).font = { color: { argb: argb(EXCEL_STYLE.muted) } };
   sheet.mergeCells(3, 1, 3, columnCount);
   sheet.getCell(3, 1).value = template.title;
@@ -64,6 +64,27 @@ function addCompanyHeader(sheet, template, columnCount) {
     company.taxVatNumber ? `Tax/VAT: ${company.taxVatNumber}` : "",
   ].filter(Boolean).join(" | ");
   sheet.getRow(4).font = { color: { argb: argb(EXCEL_STYLE.muted) } };
+}
+
+function addSettingsBlocks(sheet, template, rowNumber, columnCount) {
+  const blocks = [
+    ["Banking Details", ...(template.bankingRows || []).map(([label, value]) => `${label}: ${value}`)],
+    ["Terms & Approval", template.terms || template.paymentTerms || "", `${template.preparedByTitle || "Prepared by"}: ${template.preparedBy || ""}`, `${template.approvedByTitle || "Approved by"}: ${template.approvedBy || ""}`],
+    ["Footer", template.footerText || ""],
+  ];
+  blocks.forEach((values) => {
+    const row = sheet.getRow(rowNumber);
+    row.getCell(1).value = values[0];
+    row.getCell(1).font = { bold: true, color: { argb: argb(EXCEL_STYLE.red) } };
+    sheet.mergeCells(rowNumber, 2, rowNumber, columnCount);
+    row.getCell(2).value = values.slice(1).filter(Boolean).join("\n");
+    row.eachCell((cell) => {
+      cell.border = thinBorder();
+      cell.alignment = { wrapText: true, vertical: "top" };
+    });
+    row.height = Math.max(24, values.length * 13);
+    rowNumber += 1;
+  });
 }
 
 function addMetaRows(sheet, template, startRow = 6) {
@@ -122,6 +143,7 @@ function addDocumentSheet(workbook, template) {
   sheet.getCell(rowNumber + 1, 1).value = template.notes.join("\n") || "Thank you for your business.";
   sheet.getCell(rowNumber + 1, 1).alignment = { wrapText: true, vertical: "top" };
   sheet.getCell(rowNumber + 1, 1).border = thinBorder();
+  addSettingsBlocks(sheet, template, rowNumber + 5, 6);
 }
 
 function addReceiptSheet(workbook, template) {
@@ -144,6 +166,8 @@ function addReceiptSheet(workbook, template) {
     styleBody(row, [2]);
     rowNumber += 1;
   });
+  rowNumber += 1;
+  addSettingsBlocks(sheet, template, rowNumber, 4);
 }
 
 function addStatementSheet(workbook, template) {
@@ -171,6 +195,8 @@ function addStatementSheet(workbook, template) {
     styleBody(row, [6]);
     rowNumber += 1;
   });
+  rowNumber += 1;
+  addSettingsBlocks(sheet, template, rowNumber, 6);
 }
 
 function addReportSheet(workbook, template) {

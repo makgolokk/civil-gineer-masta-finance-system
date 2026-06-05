@@ -39,12 +39,14 @@ function setColor(doc, color, method = "setTextColor") {
   doc[method](...color);
 }
 
-function companyLines(company = {}) {
+function fallbackCompanyLines(company = {}) {
   const reg = company.registrationNumber || company.regNumber || company.companyRegistration || "";
   const tax = company.taxVatNumber || company.taxNumber || company.vatNumber || company.tin || "";
   return [
     company.address,
-    [company.phone, company.email].filter(Boolean).join(" | "),
+    [company.phone, company.alternatePhone].filter(Boolean).join(" / "),
+    company.email,
+    company.website,
     [reg ? `Reg: ${reg}` : "", tax ? `Tax/VAT: ${tax}` : ""].filter(Boolean).join(" | "),
   ].filter(Boolean);
 }
@@ -69,17 +71,17 @@ async function addLetterhead(doc, template) {
   doc.text(company.name || "Civil-Gineer Masta Proprietary Limited", logo ? 39 : 14, 13);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.5);
-  companyLines(company).slice(0, 3).forEach((line, index) => doc.text(line, logo ? 39 : 14, 19 + index * 4));
+  (template.companyLines || fallbackCompanyLines(company)).slice(0, 3).forEach((line, index) => doc.text(line, logo ? 39 : 14, 19 + index * 4));
   doc.setFont("helvetica", "bold");
   doc.setFontSize(17);
   doc.text(template.title, 196, 14, { align: "right" });
   doc.setFontSize(9);
   doc.text(template.number || "", 196, 22, { align: "right" });
-  if (company.letterhead) {
+  if (template.tagline || company.letterhead) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(7.5);
     setColor(doc, CGM_COLORS.red);
-    doc.text(asText(company.letterhead).toUpperCase(), 196, 29, { align: "right" });
+    doc.text(asText(template.tagline || company.letterhead).toUpperCase(), 196, 29, { align: "right" });
   }
   setColor(doc, CGM_COLORS.black);
 }
@@ -116,10 +118,54 @@ function addFooter(doc, template) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
     setColor(doc, CGM_COLORS.muted);
-    doc.text([company.name || "Civil-Gineer Masta", company.phone, company.email].filter(Boolean).join(" | "), 14, 291);
+    doc.text([template.footerText, company.name || "Civil-Gineer Masta", company.phone, company.email].filter(Boolean).join(" | "), 14, 291);
     doc.text(`Page ${page} of ${pages}`, 196, 291, { align: "right" });
     setColor(doc, CGM_COLORS.black);
   }
+}
+
+function addKeyValueBlock(doc, title, rows, x, y, width) {
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.8);
+  setColor(doc, CGM_COLORS.red);
+  doc.text(title, x, y);
+  doc.setFontSize(7.5);
+  let offset = 6;
+  rows.filter(([, value]) => asText(value)).slice(0, 7).forEach(([label, value]) => {
+    setColor(doc, CGM_COLORS.muted);
+    doc.setFont("helvetica", "bold");
+    doc.text(`${label}:`, x, y + offset);
+    setColor(doc, CGM_COLORS.black);
+    doc.setFont("helvetica", "normal");
+    doc.text(doc.splitTextToSize(asText(value), width - 32), x + 31, y + offset);
+    offset += 4.5;
+  });
+  setColor(doc, CGM_COLORS.black);
+}
+
+function addTermsAndApproval(doc, template, y) {
+  setColor(doc, CGM_COLORS.line, "setDrawColor");
+  doc.line(14, y - 5, 196, y - 5);
+  addKeyValueBlock(doc, "Banking Details", template.bankingRows || [], 14, y, 88);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.8);
+  setColor(doc, CGM_COLORS.red);
+  doc.text("Terms & Approval", 110, y);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  setColor(doc, CGM_COLORS.black);
+  doc.text(doc.splitTextToSize(template.terms || template.paymentTerms || "", 86), 110, y + 6);
+  doc.setFont("helvetica", "bold");
+  doc.text(template.preparedByTitle || "Prepared by", 110, y + 25);
+  doc.text(template.approvedByTitle || "Approved by", 154, y + 25);
+  setColor(doc, CGM_COLORS.line, "setDrawColor");
+  doc.line(110, y + 34, 145, y + 34);
+  doc.line(154, y + 34, 190, y + 34);
+  doc.setFont("helvetica", "normal");
+  setColor(doc, CGM_COLORS.muted);
+  doc.text(template.preparedBy || " ", 110, y + 39);
+  doc.text(template.approvedBy || " ", 154, y + 39);
+  setColor(doc, CGM_COLORS.black);
 }
 
 function tableTheme() {
@@ -152,7 +198,7 @@ function renderDocument(doc, autoTable, template) {
     tableWidth: 182,
     columnStyles: { 0: { cellWidth: 66 }, 1: { cellWidth: 34 }, 2: { cellWidth: 13, halign: "right" }, 3: { cellWidth: 16 }, 4: { cellWidth: 25, halign: "right" }, 5: { cellWidth: 28, halign: "right" } },
   });
-  const totalsY = Math.min((doc.lastAutoTable?.finalY || 112) + 8, 235);
+  const totalsY = Math.min((doc.lastAutoTable?.finalY || 112) + 8, 206);
   autoTable(doc, {
     startY: totalsY,
     margin: { left: 120 },
@@ -173,21 +219,7 @@ function renderDocument(doc, autoTable, template) {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.8);
   doc.text(doc.splitTextToSize(template.notes.join("\n") || "Thank you for your business.", 94), 14, totalsY + 12);
-  doc.setFont("helvetica", "bold");
-  doc.text("Payment Terms", 14, 266);
-  doc.setFont("helvetica", "normal");
-  doc.text(doc.splitTextToSize(template.paymentTerms, 84), 14, 271);
-  doc.setFont("helvetica", "bold");
-  doc.text("Prepared by", 112, 266);
-  doc.text("Approved by", 154, 266);
-  setColor(doc, CGM_COLORS.line, "setDrawColor");
-  doc.line(112, 276, 145, 276);
-  doc.line(154, 276, 187, 276);
-  doc.setFont("helvetica", "normal");
-  setColor(doc, CGM_COLORS.muted);
-  doc.text(template.preparedBy || " ", 112, 281);
-  doc.text(template.approvedBy || " ", 154, 281);
-  setColor(doc, CGM_COLORS.black);
+  addTermsAndApproval(doc, template, 236);
 }
 
 function renderReceipt(doc, autoTable, template) {
@@ -214,6 +246,7 @@ function renderReceipt(doc, autoTable, template) {
   });
   doc.setFontSize(8.5);
   doc.text(doc.splitTextToSize(template.notes.join("\n"), 182), 14, 172);
+  addTermsAndApproval(doc, template, 218);
 }
 
 function renderStatement(doc, autoTable, template) {
@@ -235,6 +268,7 @@ function renderStatement(doc, autoTable, template) {
     styles: { fontSize: 9.5, fontStyle: "bold" },
     columnStyles: { 1: { halign: "right" } },
   });
+  addTermsAndApproval(doc, template, 222);
 }
 
 function renderReport(doc, autoTable, template) {

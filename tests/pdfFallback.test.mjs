@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildFallbackPdfBlob } from "../src/modules/pdfFallback.js";
 import { buildFrontendExcelBlob } from "../src/modules/frontendExcelExport.js";
+import { templateForPayload } from "../src/modules/documentTemplates.js";
 
 const context = {
   settings: {
@@ -9,8 +10,23 @@ const context = {
       name: "Civil-Gineer Masta Proprietary Limited",
       email: "office@example.com",
       phone: "+267 7000 0000",
+      alternatePhone: "+267 7111 1111",
       address: "Gaborone",
-      paymentTerms: "Payment due on acceptance.",
+      logoPath: "assets/logo.png",
+      letterhead: "BUILDING THE FUTURE, MASTERING THE PRESENT",
+      footerText: "Configured footer text",
+      defaultNotes: "Configured approval note",
+      defaultTerms: "Configured payment terms from Settings.",
+      preparedBy: "Prepared Person",
+      approvedBy: "Approved Person",
+      bankingDetails: {
+        bank: "Settings Bank",
+        accountHolder: "Civil-Gineer Masta Proprietary Limited",
+        accountType: "Business Cheque",
+        accountNumber: "123456789",
+        branchName: "Main Branch",
+        branchCode: "001",
+      },
     },
     documentSettings: { currency: "BWP", vatEnabled: false, vatRate: 0 },
   },
@@ -21,27 +37,69 @@ const context = {
   payments: [],
 };
 
+const quotationPayload = {
+  context,
+  document: {
+    id: "quote-1",
+    number: "CGM-QT-0001",
+    clientId: "client-1",
+    projectId: "project-1",
+    serviceId: "service-1",
+    date: "2026-05-28",
+    validUntil: "2026-06-28",
+    status: "approved",
+    notes: "Includes drawings and submission pack.",
+    items: [{ description: "Architectural design package", serviceId: "service-1", qty: 1, rate: 8500 }],
+  },
+};
+
+test("shared document template carries Settings branding and financial blocks", () => {
+  const template = templateForPayload("quotation", quotationPayload);
+
+  assert.equal(template.company.logoPath, "assets/logo.png");
+  assert.equal(template.tagline, "BUILDING THE FUTURE, MASTERING THE PRESENT");
+  assert.ok(template.companyLines.includes("+267 7000 0000 / +267 7111 1111"));
+  assert.equal(template.terms, "Configured payment terms from Settings.");
+  assert.equal(template.footerText, "Configured footer text");
+  assert.deepEqual(template.bankingRows, [
+    ["Bank", "Settings Bank"],
+    ["Account Holder", "Civil-Gineer Masta Proprietary Limited"],
+    ["Account Type", "Business Cheque"],
+    ["Account Number", "123456789"],
+    ["Branch", "Main Branch | 001"],
+  ]);
+  assert.equal(template.preparedBy, "Prepared Person");
+  assert.equal(template.approvedBy, "Approved Person");
+});
+
 test("browser fallback generates a usable quotation PDF blob", async () => {
-  const blob = await buildFallbackPdfBlob("quotation", {
-    context,
-    document: {
-      id: "quote-1",
-      number: "CGM-QT-0001",
-      clientId: "client-1",
-      projectId: "project-1",
-      serviceId: "service-1",
-      date: "2026-05-28",
-      validUntil: "2026-06-28",
-      status: "approved",
-      notes: "Includes drawings and submission pack.",
-      items: [{ description: "Architectural design package", serviceId: "service-1", qty: 1, rate: 8500 }],
-    },
-  });
+  const blob = await buildFallbackPdfBlob("quotation", quotationPayload);
 
   assert.equal(blob.type, "application/pdf");
   assert.ok(blob.size > 1000);
   const header = await blob.slice(0, 5).text();
   assert.equal(header, "%PDF-");
+});
+
+test("document Excel fallback includes Settings banking and approval blocks", async () => {
+  const blob = await buildFrontendExcelBlob("quotation", quotationPayload);
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await blob.arrayBuffer());
+  const sheet = workbook.getWorksheet("Quotation");
+  const sheetText = [];
+  sheet.eachRow((row) => {
+    row.eachCell((cell) => sheetText.push(String(cell.value?.richText ? cell.value.richText.map((part) => part.text).join("") : cell.value ?? "")));
+  });
+  const joined = sheetText.join("\n");
+
+  assert.ok(sheet);
+  assert.match(sheet.getCell("A2").value, /BUILDING THE FUTURE/);
+  assert.match(joined, /Settings Bank/);
+  assert.match(joined, /123456789/);
+  assert.match(joined, /Configured payment terms from Settings/);
+  assert.match(joined, /Prepared Person/);
+  assert.match(joined, /Configured footer text/);
 });
 
 test("browser fallback generates a usable report PDF blob", async () => {
