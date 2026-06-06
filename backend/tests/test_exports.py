@@ -74,6 +74,32 @@ def test_quotation_export():
     assert_pdf_response(client.post("/exports/quotation", json=payload))
 
 
+def test_approved_quotation_embeds_authorised_signatures():
+    signature = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAATSURBVBhXYwCC//+BGAhBiOE/ADLfBftP/2lzAAAAAElFTkSuQmCC"
+    ctx = context()
+    ctx["settings"]["documentSignatories"] = {
+        "preparedById": "kelesitse-makgolo",
+        "approvedById": "boago-modise",
+        "profiles": [
+            {"id": "kelesitse-makgolo", "name": "Kelesitse K. Makgolo", "title": "Director", "signatureImage": signature},
+            {"id": "boago-modise", "name": "Boago Modise", "title": "Director", "signatureImage": signature},
+        ],
+    }
+    payload = {
+        "document": {
+            "number": "QT-SIGNED-0001",
+            "clientSnapshot": {"name": "Signed Client"},
+            "status": "approved",
+            "items": [{"description": "Signed proposal", "qty": 1, "rate": 500}],
+        },
+        "context": ctx,
+    }
+    response = client.post("/exports/quotation", json=payload)
+
+    assert_pdf_response(response)
+    assert response.content.count(b"/Subtype /Image") >= 2
+
+
 def test_receipt_export():
     ctx = context()
     ctx["invoices"] = [{

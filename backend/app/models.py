@@ -47,9 +47,24 @@ class DocumentSettings(BaseModel):
     defaultDiscount: float = 0
 
 
+class SignatoryProfile(BaseModel):
+    id: str = ""
+    name: str = ""
+    title: str = "Authorised Signatory"
+    signatureImage: str = ""
+    active: bool = True
+
+
+class DocumentSignatories(BaseModel):
+    preparedById: str = "kelesitse-makgolo"
+    approvedById: str = "boago-modise"
+    profiles: list[SignatoryProfile] = Field(default_factory=list)
+
+
 class AppSettings(BaseModel):
     companyProfile: CompanyProfile = Field(default_factory=CompanyProfile)
     documentSettings: DocumentSettings = Field(default_factory=DocumentSettings)
+    documentSignatories: DocumentSignatories = Field(default_factory=DocumentSignatories)
 
 
 class Client(BaseModel):

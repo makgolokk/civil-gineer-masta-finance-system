@@ -1,3 +1,4 @@
+import base64
 from io import BytesIO
 from pathlib import Path
 
@@ -201,8 +202,59 @@ def totals_box(subtotal: float, discount: float, tax: float, paid: float, total:
     return table
 
 
-def footer_sections(company: CompanyProfile, sheet, payment_terms: str = "", prepared_by: str = "", approved_by: str = "") -> list:
+def default_signatory(context: ExportContext, role: str) -> dict | None:
+    config = context.settings.documentSignatories
+    profile_id = config.approvedById if role == "approvedBy" else config.preparedById
+    profile = next((item for item in config.profiles if item.id == profile_id and item.active), None)
+    if profile:
+        return profile.model_dump()
+    company = context_company(context)
+    name = company.approvedBy if role == "approvedBy" else company.preparedBy
+    return {"name": name, "title": "Authorised Signatory", "signatureImage": ""} if name else None
+
+
+def resolve_signatories(context: ExportContext, record, include_approved: bool = True) -> dict:
+    saved = getattr(record, "signatories", {}) or {}
+    return {
+        "preparedBy": saved.get("preparedBy") or default_signatory(context, "preparedBy"),
+        "approvedBy": (saved.get("approvedBy") or default_signatory(context, "approvedBy")) if include_approved else None,
+    }
+
+
+def signature_image(value: str):
+    raw = str(value or "")
+    if not raw.startswith("data:image/") or "," not in raw:
+        return None
+    try:
+        image = Image(BytesIO(base64.b64decode(raw.split(",", 1)[1])))
+        scale = min((36 * mm) / image.imageWidth, (12 * mm) / image.imageHeight)
+        image.drawWidth = image.imageWidth * scale
+        image.drawHeight = image.imageHeight * scale
+        return image
+    except Exception:
+        return None
+
+
+def signature_cell(label: str, signatory: dict | None, sheet) -> list:
+    content = [p(f"<b>{label}</b>", sheet["Muted"]), Spacer(1, 4)]
+    if not signatory:
+        return [*content, Spacer(1, 12 * mm), p("Pending approval", sheet["Muted"])]
+    image = signature_image(signatory.get("signatureImage", ""))
+    content.append(image or Spacer(1, 12 * mm))
+    content.extend([
+        Spacer(1, 2),
+        p(f"<b>{signatory.get('name') or 'Authorised signatory'}</b>", sheet["Normal"]),
+        p(signatory.get("title") or "Authorised Signatory", sheet["Muted"]),
+    ])
+    return content
+
+
+def footer_sections(company: CompanyProfile, sheet, payment_terms: str = "", signatories: dict | None = None) -> list:
     bank = company.bankingDetails
+    signatories = signatories or {
+        "preparedBy": {"name": company.preparedBy, "title": "Authorised Signatory", "signatureImage": ""},
+        "approvedBy": {"name": company.approvedBy, "title": "Authorised Signatory", "signatureImage": ""} if company.approvedBy else None,
+    }
     return [
         Table([[info_box("Banking Details", [
             ("Bank", bank.bank),
@@ -212,10 +264,18 @@ def footer_sections(company: CompanyProfile, sheet, payment_terms: str = "", pre
             ("Branch", f"{bank.branchName} {bank.branchCode}".strip()),
         ], sheet), info_box("Terms and Approval", [
             ("Terms", payment_terms or company.defaultTerms),
-            ("Prepared by", prepared_by or company.preparedBy),
-            ("Approved by", approved_by or company.approvedBy or "________________"),
-            ("Signature", "________________________"),
         ], sheet)]], colWidths=[86 * mm, 86 * mm]),
+        Spacer(1, 8),
+        Table([[
+            signature_cell("Prepared by", signatories.get("preparedBy"), sheet),
+            signature_cell("Approved by", signatories.get("approvedBy"), sheet),
+        ]], colWidths=[86 * mm, 86 * mm], style=[
+            ("BOX", (0, 0), (-1, -1), 0.7, LINE),
+            ("INNERGRID", (0, 0), (-1, -1), 0.35, LINE),
+            ("BACKGROUND", (0, 0), (-1, -1), SOFT),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("PADDING", (0, 0), (-1, -1), 7),
+        ]),
         Spacer(1, 6),
         p(company.footerText, sheet["Muted"]),
     ]
@@ -255,6 +315,9 @@ def build_document_pdf(kind: str, document: Quotation | Invoice, context: Export
     due_value = getattr(document, "dueDate", "") if kind == "Invoice" else getattr(document, "validUntil", "")
     notes = document.notes or company.defaultNotes
     exclusions = getattr(document, "exclusions", "")
+    status = str(document.status or "draft").lower()
+    include_approved = kind != "Quotation" or status in {"approved", "invoiced"}
+    signatories = resolve_signatories(context, document, include_approved)
     story = [
         brand_header(company, kind, document.number, sheet, logo_path),
         Spacer(1, 12),
@@ -283,7 +346,7 @@ def build_document_pdf(kind: str, document: Quotation | Invoice, context: Export
         Spacer(1, 10),
         Table([[p("<b>Notes / Exclusions</b><br/>" + "<br/>".join([value for value in [notes, exclusions] if value]), sheet["Normal"]), totals_box(subtotal, discount, tax, paid, total, sheet, currency, balance_due)]], colWidths=[98 * mm, 74 * mm]),
         Spacer(1, 12),
-        *footer_sections(company, sheet, getattr(document, "paymentTerms", ""), getattr(document, "preparedBy", ""), getattr(document, "approvedBy", "")),
+        *footer_sections(company, sheet, getattr(document, "paymentTerms", ""), signatories),
     ]
     return build_pdf(story)
 
@@ -297,6 +360,7 @@ def build_receipt_pdf(receipt: Receipt, context: ExportContext, logo_path: Path 
     total = document_total(invoice.items, invoice.discount, invoice.taxRate, invoice.taxAmount) if invoice.number else 0
     paid_total = sum(payment.amount for payment in context.payments if payment.invoiceId == receipt.invoiceId)
     balance = max(0, total - paid_total)
+    signatories = resolve_signatories(context, receipt if getattr(receipt, "signatories", None) else invoice, True)
     story = [
         brand_header(company, "Receipt", receipt.receiptNumber, sheet, logo_path),
         Spacer(1, 12),
@@ -324,7 +388,7 @@ def build_receipt_pdf(receipt: Receipt, context: ExportContext, logo_path: Path 
         Spacer(1, 14),
         p(f"Thank you for your payment. This receipt confirms funds recorded against invoice {invoice.number or receipt.invoiceId}. Balance remaining: {money(balance, currency)}.", sheet["Normal"]),
         Spacer(1, 12),
-        *footer_sections(company, sheet),
+        *footer_sections(company, sheet, signatories=signatories),
     ]
     return build_pdf(story)
 
@@ -359,6 +423,6 @@ def build_statement_pdf(statement: ClientStatement, context: ExportContext, logo
         Spacer(1, 12),
         totals_box(0, 0, 0, 0, statement.balance, sheet, currency),
         Spacer(1, 12),
-        *footer_sections(company, sheet),
+        *footer_sections(company, sheet, signatories=resolve_signatories(context, statement, True)),
     ]
     return build_pdf(story)
