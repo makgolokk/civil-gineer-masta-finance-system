@@ -159,18 +159,27 @@ def default_signatory(data, role):
 
 def resolve_signatories(data, record=None, include_approved=True):
     saved = (record or {}).get("signatories") or {}
+    prepared_default = default_signatory(data, "preparedBy")
+    approved_default = default_signatory(data, "approvedBy")
+    prepared = {**(prepared_default or {}), **(saved.get("preparedBy") or {})}
+    approved = {**(approved_default or {}), **(saved.get("approvedBy") or {})}
+    prepared["signatureImage"] = (saved.get("preparedBy") or {}).get("signatureImage") or (prepared_default or {}).get("signatureImage", "")
+    approved["signatureImage"] = (saved.get("approvedBy") or {}).get("signatureImage") or (approved_default or {}).get("signatureImage", "")
     return {
-        "preparedBy": saved.get("preparedBy") or default_signatory(data, "preparedBy"),
-        "approvedBy": (saved.get("approvedBy") or default_signatory(data, "approvedBy")) if include_approved else None,
+        "preparedBy": prepared or None,
+        "approvedBy": (approved or None) if include_approved else None,
     }
 
 
 def data_url_bytes(value):
     raw = str(value or "")
-    if not raw.startswith("data:image/") or "," not in raw:
-        return None
     try:
-        return BytesIO(base64.b64decode(raw.split(",", 1)[1]))
+        if raw.startswith("data:image/") and "," in raw:
+            return BytesIO(base64.b64decode(raw.split(",", 1)[1]))
+        root = Path(__file__).resolve().parent
+        relative = raw.lstrip("/").replace("signatures/", "assets/signatures/")
+        path = root / relative
+        return path if path.exists() else None
     except Exception:
         return None
 
@@ -737,18 +746,27 @@ def signature_cell(label, signatory, styles):
         if image_data:
             try:
                 signature = Image(image_data)
-                scale = min((36 * mm) / signature.imageWidth, (12 * mm) / signature.imageHeight)
+                scale = min((42 * mm) / signature.imageWidth, (16 * mm) / signature.imageHeight)
                 signature.drawWidth = signature.imageWidth * scale
                 signature.drawHeight = signature.imageHeight * scale
-                content.extend([signature, Spacer(1, 1 * mm)])
+                stage = Table([[signature]], colWidths=[70 * mm], rowHeights=[16 * mm], style=[
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ])
+                stage.hAlign = "CENTER"
+                content.extend([stage, Spacer(1, 1 * mm)])
             except Exception:
                 pass
         else:
-            content.append(Spacer(1, 12 * mm))
+            content.append(Spacer(1, 16 * mm))
         content.append(rich(f"<b>{escape(signatory.get('name') or 'Authorised signatory')}</b>", styles["Normal"]))
         content.append(p(signatory.get("title") or "Authorised Signatory", styles["SmallMuted"]))
     else:
-        content.extend([Spacer(1, 12 * mm), p("Pending approval", styles["SmallMuted"])])
+        content.extend([Spacer(1, 16 * mm), p("Pending approval", styles["SmallMuted"])])
     return content
 
 

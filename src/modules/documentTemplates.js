@@ -60,9 +60,13 @@ export function defaultSignatory(context = {}, role = "preparedBy") {
 
 export function resolveSignatories(context = {}, record = {}, includeApproved = true) {
   const saved = record.signatories || {};
+  const preparedDefault = defaultSignatory(context, "preparedBy");
+  const approvedDefault = defaultSignatory(context, "approvedBy");
+  const preparedBy = saved.preparedBy ? { ...preparedDefault, ...saved.preparedBy, signatureImage: saved.preparedBy.signatureImage || preparedDefault?.signatureImage || "" } : preparedDefault;
+  const approvedBy = saved.approvedBy ? { ...approvedDefault, ...saved.approvedBy, signatureImage: saved.approvedBy.signatureImage || approvedDefault?.signatureImage || "" } : approvedDefault;
   return {
-    preparedBy: saved.preparedBy || defaultSignatory(context, "preparedBy"),
-    approvedBy: includeApproved ? (saved.approvedBy || defaultSignatory(context, "approvedBy")) : null,
+    preparedBy,
+    approvedBy: includeApproved ? approvedBy : null,
   };
 }
 

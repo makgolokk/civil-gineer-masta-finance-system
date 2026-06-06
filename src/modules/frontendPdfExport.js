@@ -4,6 +4,7 @@ import { templateForPayload } from "./documentTemplates.js";
 import { validatePdfBlob } from "./exportValidation.js";
 
 const logoCache = new Map();
+const signatureCache = new Map();
 
 async function pdfTools() {
   const [{ jsPDF }, autoTableModule] = await Promise.all([
@@ -58,6 +59,31 @@ async function blobToDataUrl(blob) {
   }
   const bytes = Buffer.from(await blob.arrayBuffer());
   return `data:${blob.type || "image/png"};base64,${bytes.toString("base64")}`;
+}
+
+async function signatureDataUrl(value = "") {
+  const source = asText(value);
+  if (!source || source.startsWith("data:image/")) return source;
+  if (signatureCache.has(source)) return signatureCache.get(source);
+  signatureCache.set(source, "");
+  if (typeof fetch !== "function") return "";
+  try {
+    const response = await fetch(source);
+    if (!response.ok) return "";
+    const dataUrl = await blobToDataUrl(await response.blob());
+    signatureCache.set(source, dataUrl);
+    return dataUrl;
+  } catch (error) {
+    console.debug("Signature image unavailable for local PDF export", source, error);
+    return "";
+  }
+}
+
+async function hydrateSignatureImages(template) {
+  const signatories = template.signatories || {};
+  await Promise.all(Object.values(signatories).filter(Boolean).map(async (signatory) => {
+    signatory.signatureImage = await signatureDataUrl(signatory.signatureImage);
+  }));
 }
 
 function setColor(doc, color, method = "setTextColor") {
@@ -224,25 +250,27 @@ function addSignatureBlock(doc, signatory, label, x, y, width) {
       const ratio = props.width / props.height;
       let imageWidth = Math.min(width, 31);
       let imageHeight = imageWidth / ratio;
-      if (imageHeight > 11) {
-        imageHeight = 11;
+      if (imageHeight > 13) {
+        imageHeight = 13;
         imageWidth = imageHeight * ratio;
       }
-      doc.addImage(signatory.signatureImage, format, x, y + 2, imageWidth, imageHeight, undefined, "FAST");
+      const imageX = x + (width - imageWidth) / 2;
+      const imageY = y + 15 - imageHeight;
+      doc.addImage(signatory.signatureImage, format, imageX, imageY, imageWidth, imageHeight, undefined, "FAST");
     } catch (error) {
       console.debug("Signature image could not be embedded", error);
     }
   }
   setColor(doc, CGM_COLORS.line, "setDrawColor");
-  doc.line(x, y + 14, x + width, y + 14);
+  doc.line(x, y + 16, x + width, y + 16);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7.2);
   setColor(doc, CGM_COLORS.black);
-  doc.text(doc.splitTextToSize(signatory.name || "Authorised signatory", width), x, y + 18);
+  doc.text(doc.splitTextToSize(signatory.name || "Authorised signatory", width), x, y + 20);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.8);
   setColor(doc, CGM_COLORS.muted);
-  doc.text(doc.splitTextToSize(signatory.title || "Authorised Signatory", width), x, y + 22);
+  doc.text(doc.splitTextToSize(signatory.title || "Authorised Signatory", width), x, y + 24);
 }
 
 function tableTheme() {
@@ -369,6 +397,7 @@ async function renderReport(doc, autoTable, template) {
 export async function buildFrontendPdfBlob(kind, payload) {
   const { jsPDF, autoTable } = await pdfTools();
   const template = templateForPayload(kind, payload);
+  await hydrateSignatureImages(template);
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   await addLetterhead(doc, template);
   if (template.type === "business-document") renderDocument(doc, autoTable, template);

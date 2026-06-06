@@ -66,6 +66,10 @@ async function withMockedLogoFetch(callback) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const path = String(url);
+    if (path.startsWith("/signatures/")) {
+      const file = await readFile(`./public${path}`);
+      return new Response(file, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
     if (path === "/logo-doc.png" || path === "/logo.png") {
       const file = await readFile(path === "/logo-doc.png" ? "./public/logo-doc.png" : "./public/logo.png");
       return new Response(file, { status: 200, headers: { "Content-Type": "image/png" } });
@@ -134,6 +138,20 @@ test("approved document PDFs embed authorised signature images", async () => {
   const imageObjects = pdfText.match(/\/Subtype\s*\/Image/g) || [];
 
   assert.ok(imageObjects.length >= 2);
+});
+
+test("bundled signature assets resolve without distortion in browser PDFs", async () => {
+  const signedContext = structuredClone(context);
+  signedContext.settings.documentSignatories.profiles[0].signatureImage = "/signatures/kelesitse-makgolo.png";
+  signedContext.settings.documentSignatories.profiles[1].signatureImage = "/signatures/boago-modise.png";
+  const blob = await withMockedLogoFetch(() => buildFallbackPdfBlob("quotation", {
+    context: signedContext,
+    document: { ...quotationPayload.document, status: "approved" },
+  }));
+  const pdfText = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  const imageObjects = pdfText.match(/\/Subtype\s*\/Image/g) || [];
+
+  assert.ok(imageObjects.length >= 3);
 });
 
 test("document Excel fallback includes Settings banking and approval blocks", async () => {

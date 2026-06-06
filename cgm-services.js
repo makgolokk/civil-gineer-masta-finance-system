@@ -108,14 +108,16 @@
             id: "kelesitse-makgolo",
             name: "Kelesitse K. Makgolo",
             title: "Authorised Signatory",
-            signatureImage: "",
+            signatureImage: "/signatures/kelesitse-makgolo.png",
+            signatureRemoved: false,
             active: true,
           },
           {
             id: "boago-modise",
             name: "Boago Modise",
             title: "Authorised Signatory",
-            signatureImage: "",
+            signatureImage: "/signatures/boago-modise.png",
+            signatureRemoved: false,
             active: true,
           },
         ],
@@ -308,10 +310,15 @@
     const documentSignatories = {
       ...defaults.documentSignatories,
       ...savedSignatories,
-      profiles: defaults.documentSignatories.profiles.map((profile) => ({
-        ...profile,
-        ...(savedProfiles.find((item) => item.id === profile.id) || {}),
-      })),
+      profiles: defaults.documentSignatories.profiles.map((profile) => {
+        const saved = savedProfiles.find((item) => item.id === profile.id);
+        if (!saved) return profile;
+        return {
+          ...profile,
+          ...saved,
+          signatureImage: saved.signatureRemoved ? "" : (saved.signatureImage || profile.signatureImage),
+        };
+      }),
     };
     if (!companyProfile.logoPath || companyProfile.logoPath === "assets/logo.png" || companyProfile.logoPath === "/assets/logo.png") {
       companyProfile.logoPath = defaults.companyProfile.logoPath;

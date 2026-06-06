@@ -1364,11 +1364,15 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     for (const profile of signatories.profiles) {
       profile.name = data[`signatory.${profile.id}.name`] || profile.name;
       profile.title = data[`signatory.${profile.id}.title`] || profile.title;
-      if (data[`signatory.${profile.id}.remove`] === "on") profile.signatureImage = "";
+      if (data[`signatory.${profile.id}.remove`] === "on") {
+        profile.signatureImage = "";
+        profile.signatureRemoved = true;
+      }
       const file = form.elements.namedItem(`signatory.${profile.id}.signature`)?.files?.[0];
       if (file?.size) {
         try {
           profile.signatureImage = await signatureImageDataUrl(file);
+          profile.signatureRemoved = false;
         } catch (error) {
           notify("Signature not saved", `${profile.name}: ${error.message}`, "error");
           return;

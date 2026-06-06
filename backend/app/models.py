@@ -52,13 +52,17 @@ class SignatoryProfile(BaseModel):
     name: str = ""
     title: str = "Authorised Signatory"
     signatureImage: str = ""
+    signatureRemoved: bool = False
     active: bool = True
 
 
 class DocumentSignatories(BaseModel):
     preparedById: str = "kelesitse-makgolo"
     approvedById: str = "boago-modise"
-    profiles: list[SignatoryProfile] = Field(default_factory=list)
+    profiles: list[SignatoryProfile] = Field(default_factory=lambda: [
+        SignatoryProfile(id="kelesitse-makgolo", name="Kelesitse K. Makgolo", signatureImage="/signatures/kelesitse-makgolo.png"),
+        SignatoryProfile(id="boago-modise", name="Boago Modise", signatureImage="/signatures/boago-modise.png"),
+    ])
 
 
 class AppSettings(BaseModel):

@@ -215,19 +215,34 @@ def default_signatory(context: ExportContext, role: str) -> dict | None:
 
 def resolve_signatories(context: ExportContext, record, include_approved: bool = True) -> dict:
     saved = getattr(record, "signatories", {}) or {}
+    prepared_default = default_signatory(context, "preparedBy")
+    approved_default = default_signatory(context, "approvedBy")
+    prepared = {**(prepared_default or {}), **(saved.get("preparedBy") or {})}
+    approved = {**(approved_default or {}), **(saved.get("approvedBy") or {})}
+    prepared["signatureImage"] = (saved.get("preparedBy") or {}).get("signatureImage") or (prepared_default or {}).get("signatureImage", "")
+    approved["signatureImage"] = (saved.get("approvedBy") or {}).get("signatureImage") or (approved_default or {}).get("signatureImage", "")
     return {
-        "preparedBy": saved.get("preparedBy") or default_signatory(context, "preparedBy"),
-        "approvedBy": (saved.get("approvedBy") or default_signatory(context, "approvedBy")) if include_approved else None,
+        "preparedBy": prepared or None,
+        "approvedBy": (approved or None) if include_approved else None,
     }
 
 
 def signature_image(value: str):
     raw = str(value or "")
-    if not raw.startswith("data:image/") or "," not in raw:
-        return None
     try:
-        image = Image(BytesIO(base64.b64decode(raw.split(",", 1)[1])))
-        scale = min((36 * mm) / image.imageWidth, (12 * mm) / image.imageHeight)
+        if raw.startswith("data:image/") and "," in raw:
+            source = BytesIO(base64.b64decode(raw.split(",", 1)[1]))
+        else:
+            relative = Path(raw.lstrip("/").replace("signatures/", "assets/signatures/"))
+            source = next((
+                root / relative
+                for root in [Path(__file__).resolve().parents[1], Path(__file__).resolve().parents[2]]
+                if (root / relative).exists()
+            ), None)
+            if source is None:
+                return None
+        image = Image(source)
+        scale = min((42 * mm) / image.imageWidth, (16 * mm) / image.imageHeight)
         image.drawWidth = image.imageWidth * scale
         image.drawHeight = image.imageHeight * scale
         return image
@@ -238,9 +253,15 @@ def signature_image(value: str):
 def signature_cell(label: str, signatory: dict | None, sheet) -> list:
     content = [p(f"<b>{label}</b>", sheet["Muted"]), Spacer(1, 4)]
     if not signatory:
-        return [*content, Spacer(1, 12 * mm), p("Pending approval", sheet["Muted"])]
+        return [*content, Spacer(1, 16 * mm), p("Pending approval", sheet["Muted"])]
     image = signature_image(signatory.get("signatureImage", ""))
-    content.append(image or Spacer(1, 12 * mm))
+    stage = Table([[image or ""]], colWidths=[72 * mm], rowHeights=[16 * mm], style=[
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+        ("PADDING", (0, 0), (-1, -1), 0),
+    ])
+    stage.hAlign = "CENTER"
+    content.append(stage)
     content.extend([
         Spacer(1, 2),
         p(f"<b>{signatory.get('name') or 'Authorised signatory'}</b>", sheet["Normal"]),
