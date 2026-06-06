@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import base64
 from html import escape
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -137,6 +138,41 @@ def logo_file_candidates(value):
     candidates.append(root / "public" / "logo.png")
     candidates.append(root / "assets" / "logo.png")
     return candidates
+
+
+def default_signatory(data, role):
+    settings = (data or {}).get("settings", {})
+    config = settings.get("documentSignatories", {})
+    profile_id = config.get("approvedById") if role == "approvedBy" else config.get("preparedById")
+    profile = next((item for item in config.get("profiles", []) if item.get("id") == profile_id and item.get("active", True)), None)
+    if profile:
+        return {
+            "id": profile.get("id", ""),
+            "name": profile.get("name", ""),
+            "title": profile.get("title") or "Authorised Signatory",
+            "signatureImage": profile.get("signatureImage", ""),
+        }
+    company = company_from_data(data)
+    name = company.get("approvedBy") if role == "approvedBy" else company.get("preparedBy")
+    return {"name": name, "title": "Authorised Signatory", "signatureImage": ""} if name else None
+
+
+def resolve_signatories(data, record=None, include_approved=True):
+    saved = (record or {}).get("signatories") or {}
+    return {
+        "preparedBy": saved.get("preparedBy") or default_signatory(data, "preparedBy"),
+        "approvedBy": (saved.get("approvedBy") or default_signatory(data, "approvedBy")) if include_approved else None,
+    }
+
+
+def data_url_bytes(value):
+    raw = str(value or "")
+    if not raw.startswith("data:image/") or "," not in raw:
+        return None
+    try:
+        return BytesIO(base64.b64decode(raw.split(",", 1)[1]))
+    except Exception:
+        return None
 
 
 def invoice_paid(data, invoice_id):
@@ -327,7 +363,7 @@ def rich(text, style):
     return Paragraph(str(text or ""), style)
 
 
-def brand_header(title, number, styles, data=None):
+def brand_header(title, number, styles, data=None, status=""):
     company = company_from_data(data)
     try:
         logo_path = next((candidate for candidate in logo_file_candidates(company["logoPath"]) if candidate.exists()), None)
@@ -341,6 +377,8 @@ def brand_header(title, number, styles, data=None):
         rich(f"<font size='23' color='#{RED}'><b>{escape(title.upper())}</b></font>", styles["Normal"]),
         rich(f"<font color='#{BLACK}'><b>No. {escape(str(number or 'Draft'))}</b></font>", styles["DocNumber"]),
     ]
+    if status:
+        title_block.append(rich(f"<font size='7' color='#{RED}'><b>{escape(str(status).upper())}</b></font>", styles["DocNumber"]))
     contact = f"{company['address']}<br/>{company['phone']}<br/>{company['email']}"
     return Table(
         [
@@ -590,8 +628,10 @@ def build_document_pdf(data, kind, document):
     due_value = document.get("dueDate") if kind == "invoice" else document.get("validUntil")
     paid = invoice_paid(data, document.get("id")) if kind == "invoice" else 0
     status = invoice_status(data, document) if kind == "invoice" else str(document.get("status") or "Draft").title()
+    include_approved = kind != "quotation" or str(document.get("status") or "draft").lower() in ["approved", "invoiced"]
+    signatories = resolve_signatories(data, document, include_approved)
     story = [
-        brand_header(kind.title(), document.get("number", ""), styles, data),
+        brand_header(kind.title(), document.get("number", ""), styles, data, status),
         Spacer(1, 5 * mm),
         document_intro(kind, document, client, project, styles, data),
         Spacer(1, 7 * mm),
@@ -663,7 +703,7 @@ def build_document_pdf(data, kind, document):
         Spacer(1, 7 * mm),
         banking_box(company, styles),
         Spacer(1, 8 * mm),
-        signature_table(company),
+        signature_table(company, signatories, styles),
         Spacer(1, 5 * mm),
         rich(f"<font color='#{MUTED}'>{escape(company['subtitle'])}</font>", styles["Footer"]),
     ])
@@ -690,22 +730,47 @@ def document_table_style():
     )
 
 
-def signature_table(company=None):
+def signature_cell(label, signatory, styles):
+    content = [rich(f"<font color='#{MUTED}'><b>{escape(label)}</b></font>", styles["SmallMuted"]), Spacer(1, 2 * mm)]
+    if signatory:
+        image_data = data_url_bytes(signatory.get("signatureImage"))
+        if image_data:
+            try:
+                signature = Image(image_data)
+                scale = min((36 * mm) / signature.imageWidth, (12 * mm) / signature.imageHeight)
+                signature.drawWidth = signature.imageWidth * scale
+                signature.drawHeight = signature.imageHeight * scale
+                content.extend([signature, Spacer(1, 1 * mm)])
+            except Exception:
+                pass
+        else:
+            content.append(Spacer(1, 12 * mm))
+        content.append(rich(f"<b>{escape(signatory.get('name') or 'Authorised signatory')}</b>", styles["Normal"]))
+        content.append(p(signatory.get("title") or "Authorised Signatory", styles["SmallMuted"]))
+    else:
+        content.extend([Spacer(1, 12 * mm), p("Pending approval", styles["SmallMuted"])])
+    return content
+
+
+def signature_table(company=None, signatories=None, styles=None):
     company = company or COMPANY
+    styles = styles or stylesheet()
+    signatories = signatories or {
+        "preparedBy": {"name": company.get("preparedBy", ""), "title": "Authorised Signatory", "signatureImage": ""},
+        "approvedBy": {"name": company.get("approvedBy", ""), "title": "Authorised Signatory", "signatureImage": ""} if company.get("approvedBy") else None,
+    }
     return Table(
-        [["Prepared by", "Approved / Client Signature"], [company.get("preparedBy", ""), company.get("approvedBy", "")]],
+        [[signature_cell("Prepared by", signatories.get("preparedBy"), styles), signature_cell("Approved by", signatories.get("approvedBy"), styles)]],
         colWidths=[80 * mm, 80 * mm],
-        rowHeights=[8 * mm, 16 * mm],
         style=[
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(f"#{PAPER_TINT}")),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor(f"#{MUTED}")),
             ("BOX", (0, 0), (-1, -1), 0.35, colors.HexColor(f"#{BORDER}")),
             ("INNERGRID", (0, 0), (-1, -1), 0.35, colors.HexColor(f"#{BORDER}")),
-            ("LINEBELOW", (0, 1), (-1, 1), 0.8, colors.HexColor(f"#{BLACK}")),
-            ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(f"#{PAPER_TINT}")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LEFTPADDING", (0, 0), (-1, -1), 8),
             ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ],
     )
 
@@ -721,6 +786,7 @@ def build_receipt_pdf(data, payment):
     invoice_total = document_total(invoice)
     paid_before = max(0, invoice_paid(data, invoice.get("id")) - float(payment.get("amount") or 0))
     balance_after = max(0, invoice_total - paid_before - float(payment.get("amount") or 0))
+    signatories = resolve_signatories(data, payment if payment.get("signatories") else invoice, True)
     allocation_rows.append([
         p(invoice.get("number", "Invoice"), styles["Normal"]),
         p(money(invoice_total), styles["Normal"]),
@@ -730,7 +796,7 @@ def build_receipt_pdf(data, payment):
     allocation_table = Table(allocation_rows, colWidths=[62 * mm, 36 * mm, 38 * mm, 34 * mm], repeatRows=1)
     allocation_table.setStyle(document_table_style())
     story = [
-        brand_header("Receipt", payment.get("receiptNumber", ""), styles, data),
+        brand_header("Receipt", payment.get("receiptNumber", ""), styles, data, "Issued"),
         Spacer(1, 7 * mm),
         Table(
             [[
@@ -776,7 +842,7 @@ def build_receipt_pdf(data, payment):
         Spacer(1, 7 * mm),
         banking_box(company, styles),
         Spacer(1, 8 * mm),
-        signature_table(company),
+        signature_table(company, signatories, styles),
         Spacer(1, 5 * mm),
         rich(f"<font color='#{MUTED}'>{escape(company['subtitle'])}</font>", styles["Footer"]),
     ]
@@ -836,7 +902,7 @@ def build_statement_pdf(data, statement_type, party_id):
     table = Table(table_rows, colWidths=[24 * mm, 34 * mm, 30 * mm, 27 * mm, 27 * mm, 28 * mm], repeatRows=1)
     table.setStyle(document_table_style())
     story = [
-        brand_header(title, datetime.now().strftime("%Y-%m-%d"), styles, data),
+        brand_header(title, datetime.now().strftime("%Y-%m-%d"), styles, data, "Issued"),
         Spacer(1, 7 * mm),
         Table(
             [[
@@ -864,7 +930,7 @@ def build_statement_pdf(data, statement_type, party_id):
         Spacer(1, 7 * mm),
         banking_box(company, styles),
         Spacer(1, 8 * mm),
-        signature_table(company),
+        signature_table(company, resolve_signatories(data, {}, True), styles),
         Spacer(1, 5 * mm),
         rich(f"<font color='#{MUTED}'>{escape(company['subtitle'])}</font>", styles["Footer"]),
     ]
@@ -894,7 +960,7 @@ def build_payload_statement_pdf(data, statement):
     buffer = BytesIO()
     pdf = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
     story = [
-        brand_header("Statement of Account", statement.get("statementNumber") or datetime.now().strftime("%Y-%m-%d"), styles, data),
+        brand_header("Statement of Account", statement.get("statementNumber") or datetime.now().strftime("%Y-%m-%d"), styles, data, "Issued"),
         Spacer(1, 7 * mm),
         Table(
             [[
@@ -923,7 +989,7 @@ def build_payload_statement_pdf(data, statement):
         Spacer(1, 7 * mm),
         banking_box(company_from_data(data), styles),
         Spacer(1, 8 * mm),
-        signature_table(company_from_data(data)),
+        signature_table(company_from_data(data), resolve_signatories(data, statement, True), styles),
         Spacer(1, 5 * mm),
         rich(f"<font color='#{MUTED}'>{escape(company_from_data(data)['subtitle'])}</font>", styles["Footer"]),
     ]
@@ -974,7 +1040,7 @@ def build_report_pdf(data):
     for invoice in data.get("invoices", []):
         invoices.append([invoice.get("number", ""), client_name(data, invoice.get("clientId")), money(document_total(invoice)), money(invoice_paid(data, invoice.get("id"))), invoice_status(data, invoice)])
     story = [
-        brand_header("Monthly Financial Report", summary["month"], styles, data),
+        brand_header("Monthly Financial Report", summary["month"], styles, data, "Issued"),
         Spacer(1, 6 * mm),
         rich("<b>Executive Summary</b>", styles["DocTitle"]),
         metric_cards([
@@ -989,7 +1055,7 @@ def build_report_pdf(data):
         rich("<b>Invoice Payment Position</b>", styles["DocTitle"]),
         report_table(["Invoice", "Client", "Total", "Paid", "Status"], invoices, 250),
         Spacer(1, 10 * mm),
-        signature_table(company),
+        signature_table(company, resolve_signatories(data, {}, True), styles),
         Spacer(1, 4 * mm),
         rich(f"<font color='#{MUTED}'>{escape(company['subtitle'])}</font>", styles["Footer"]),
     ]
@@ -1009,13 +1075,13 @@ def build_generic_report_pdf(report, data=None):
     page_width = 250 if wide else 170
     pdf = SimpleDocTemplate(buffer, pagesize=page_size, leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
     story = [
-        brand_header(title, datetime.now().strftime("%Y-%m-%d"), styles, data),
+        brand_header(title, datetime.now().strftime("%Y-%m-%d"), styles, data, "Issued"),
         Spacer(1, 6 * mm),
         notes_box("Report Purpose", "Prepared from Civil-Gineer Masta business records. Use this report for review, reconciliation, approvals, and management action.", styles),
         Spacer(1, 6 * mm),
         report_table(headers, rows, page_width),
         Spacer(1, 9 * mm),
-        signature_table(company),
+        signature_table(company, resolve_signatories(data, report, True), styles),
         Spacer(1, 4 * mm),
         rich(f"<font color='#{MUTED}'>{escape(company['subtitle'])}</font>", styles["Footer"]),
     ]

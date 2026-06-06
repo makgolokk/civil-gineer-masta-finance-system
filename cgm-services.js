@@ -100,6 +100,26 @@
         vatRate: 0,
         defaultDiscount: 0,
       },
+      documentSignatories: {
+        preparedById: "kelesitse-makgolo",
+        approvedById: "boago-modise",
+        profiles: [
+          {
+            id: "kelesitse-makgolo",
+            name: "Kelesitse K. Makgolo",
+            title: "Authorised Signatory",
+            signatureImage: "",
+            active: true,
+          },
+          {
+            id: "boago-modise",
+            name: "Boago Modise",
+            title: "Authorised Signatory",
+            signatureImage: "",
+            active: true,
+          },
+        ],
+      },
       presets: {
         serviceCategories: services.map((service) => service.name),
         itemDescriptions: ["Consultation fee", "Architectural design", "Engineering design", "Project management", "Maintenance works"],
@@ -283,6 +303,16 @@
   function mergeSettings(settings = {}) {
     const defaults = defaultSettings();
     const companyProfile = { ...defaults.companyProfile, ...(settings.companyProfile || {}) };
+    const savedSignatories = settings.documentSignatories || {};
+    const savedProfiles = savedSignatories.profiles || [];
+    const documentSignatories = {
+      ...defaults.documentSignatories,
+      ...savedSignatories,
+      profiles: defaults.documentSignatories.profiles.map((profile) => ({
+        ...profile,
+        ...(savedProfiles.find((item) => item.id === profile.id) || {}),
+      })),
+    };
     if (!companyProfile.logoPath || companyProfile.logoPath === "assets/logo.png" || companyProfile.logoPath === "/assets/logo.png") {
       companyProfile.logoPath = defaults.companyProfile.logoPath;
     }
@@ -291,6 +321,7 @@
       ...settings,
       companyProfile,
       documentSettings: { ...defaults.documentSettings, ...(settings.documentSettings || {}) },
+      documentSignatories,
       presets: { ...defaults.presets, ...(settings.presets || {}) },
       preferences: { ...defaults.preferences, ...(settings.preferences || {}) },
       defaultBankAccountId: normalizeMoneyAccount(settings.defaultBankAccountId || defaults.defaultBankAccountId),

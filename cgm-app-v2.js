@@ -196,6 +196,26 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     return state.settings;
   }
 
+  function signatorySnapshot(profile) {
+    if (!profile) return null;
+    return {
+      id: profile.id,
+      name: profile.name || "",
+      title: profile.title || "Authorised Signatory",
+      signatureImage: profile.signatureImage || "",
+    };
+  }
+
+  function defaultDocumentSignatories(includeApproved = true) {
+    const config = settings().documentSignatories;
+    const prepared = config.profiles.find((profile) => profile.id === config.preparedById && profile.active !== false);
+    const approved = config.profiles.find((profile) => profile.id === config.approvedById && profile.active !== false);
+    return {
+      preparedBy: signatorySnapshot(prepared),
+      approvedBy: includeApproved ? signatorySnapshot(approved) : null,
+    };
+  }
+
   function activeItems(items, includeArchived = false) {
     return (items || []).filter((item) => includeArchived || CGM.isActiveRecord(item));
   }
@@ -1063,6 +1083,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     }
     const company = s.companyProfile;
     const doc = s.documentSettings;
+    const signatories = s.documentSignatories;
     const presets = s.presets;
     qs("#settingsView").innerHTML = `
       <section class="panel">
@@ -1084,8 +1105,28 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
           <label class="field full">Address<textarea name="company.address">${esc(company.address)}</textarea></label>
           <label class="field full">Default notes<textarea name="company.defaultNotes">${esc(company.defaultNotes)}</textarea></label>
           <label class="field full">Default terms and conditions<textarea name="company.defaultTerms">${esc(company.defaultTerms)}</textarea></label>
-          ${input("company.preparedBy", "Prepared by", "text", false, company.preparedBy)}
-          ${input("company.approvedBy", "Approved by", "text", false, company.approvedBy)}
+          <div class="settings-subsection full">
+            <div class="section-head"><div><h3>Authorised document signatories</h3><p>Only these controlled profiles can be placed on client documents.</p></div></div>
+            <div class="signatory-grid">
+              ${signatories.profiles.map((profile) => `
+                <article class="signatory-editor">
+                  <div class="signatory-preview">
+                    ${profile.signatureImage ? `<img src="${esc(profile.signatureImage)}" alt="${esc(profile.name)} signature">` : `<span>No signature uploaded</span>`}
+                  </div>
+                  ${input(`signatory.${profile.id}.name`, "Full name", "text", true, profile.name)}
+                  ${input(`signatory.${profile.id}.title`, "Job title", "text", true, profile.title)}
+                  <label class="field">Signature image
+                    <input type="file" name="signatory.${profile.id}.signature" accept="image/png,image/jpeg,image/webp">
+                  </label>
+                  <label class="check-field"><input type="checkbox" name="signatory.${profile.id}.remove"> Remove uploaded signature</label>
+                </article>
+              `).join("")}
+            </div>
+            <div class="form-grid signatory-defaults">
+              <label class="field">Default prepared by<select name="signatory.preparedById">${signatories.profiles.map((profile) => `<option value="${profile.id}" ${profile.id === signatories.preparedById ? "selected" : ""}>${esc(profile.name)}</option>`).join("")}</select></label>
+              <label class="field">Default approved by<select name="signatory.approvedById">${signatories.profiles.map((profile) => `<option value="${profile.id}" ${profile.id === signatories.approvedById ? "selected" : ""}>${esc(profile.name)}</option>`).join("")}</select></label>
+            </div>
+          </div>
           ${input("bank.bank", "Bank", "text", false, company.bankingDetails.bank)}
           ${input("bank.accountHolder", "Account holder", "text", false, company.bankingDetails.accountHolder)}
           ${input("bank.accountType", "Account type", "text", false, company.bankingDetails.accountType)}
@@ -1257,7 +1298,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
   function documentPreview(doc) {
     const s = settings();
     const template = templateForPayload("invoice", {
-      context: { settings: { companyProfile: s.companyProfile, documentSettings: s.documentSettings }, clients: [], projects: [], services: [] },
+      context: { settings: { companyProfile: s.companyProfile, documentSettings: s.documentSettings, documentSignatories: s.documentSignatories }, clients: [], projects: [], services: [] },
       document: {
         number: doc.number,
         date: CGM.today(),
@@ -1287,13 +1328,17 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       <div class="doc-total"><span>Total</span><strong>${money.format(template.totals.at(-1)?.[1] || doc.total)}</strong></div>
       <div class="doc-two">
         <div><h3>Banking Details</h3><p>${template.bankingRows.map(([label, value]) => `${esc(label)}: ${esc(value)}`).join("<br>")}</p></div>
-        <div><h3>Terms & Approval</h3><p>${esc(template.terms)}</p><div class="signature-line">${esc(template.preparedByTitle)}: ${esc(template.preparedBy || "")}</div><div class="signature-line">${esc(template.approvedByTitle)}: ${esc(template.approvedBy || "")}</div></div>
+        <div><h3>Terms & Approval</h3><p>${esc(template.terms)}</p><div class="preview-signatures">${previewSignature(template.signatories?.preparedBy, template.preparedByTitle)}${previewSignature(template.signatories?.approvedBy, template.approvedByTitle)}</div></div>
       </div>
       <footer>${esc(template.footerText)}</footer>
     </article>`;
   }
 
-  function handleSettingsSave(event) {
+  function previewSignature(signatory, label) {
+    return `<div class="preview-signature"><strong>${esc(label || "Signatory")}</strong>${signatory?.signatureImage ? `<img src="${esc(signatory.signatureImage)}" alt="">` : `<span>${signatory ? "Signature not uploaded" : "Pending approval"}</span>`}${signatory ? `<b>${esc(signatory.name)}</b><small>${esc(signatory.title)}</small>` : ""}</div>`;
+  }
+
+  async function handleSettingsSave(event) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form));
@@ -1301,6 +1346,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     const nextSettings = structuredClone(settings());
     const company = nextSettings.companyProfile;
     const doc = nextSettings.documentSettings;
+    const signatories = nextSettings.documentSignatories;
     const bank = company.bankingDetails;
     company.name = data["company.name"];
     company.tradingName = data["company.tradingName"];
@@ -1315,8 +1361,28 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     company.address = data["company.address"];
     company.defaultNotes = data["company.defaultNotes"];
     company.defaultTerms = data["company.defaultTerms"];
-    company.preparedBy = data["company.preparedBy"];
-    company.approvedBy = data["company.approvedBy"];
+    for (const profile of signatories.profiles) {
+      profile.name = data[`signatory.${profile.id}.name`] || profile.name;
+      profile.title = data[`signatory.${profile.id}.title`] || profile.title;
+      if (data[`signatory.${profile.id}.remove`] === "on") profile.signatureImage = "";
+      const file = form.elements.namedItem(`signatory.${profile.id}.signature`)?.files?.[0];
+      if (file?.size) {
+        try {
+          profile.signatureImage = await signatureImageDataUrl(file);
+        } catch (error) {
+          notify("Signature not saved", `${profile.name}: ${error.message}`, "error");
+          return;
+        }
+      }
+    }
+    signatories.preparedById = data["signatory.preparedById"];
+    signatories.approvedById = data["signatory.approvedById"];
+    const preparedProfile = signatories.profiles.find((profile) => profile.id === signatories.preparedById);
+    const approvedProfile = signatories.profiles.find((profile) => profile.id === signatories.approvedById);
+    company.preparedBy = preparedProfile?.name || "";
+    company.preparedByTitle = preparedProfile?.title || "Prepared by";
+    company.approvedBy = approvedProfile?.name || "";
+    company.approvedByTitle = approvedProfile?.title || "Approved by";
     bank.bank = data["bank.bank"];
     bank.accountHolder = data["bank.accountHolder"];
     bank.accountType = data["bank.accountType"];
@@ -1339,7 +1405,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     nextSettings.presets.paymentMethods = linesFromTextarea(data["presets.paymentMethods"]);
     state.settings = nextSettings;
     state.company = { ...state.company, ...company };
-    save({ action: "update-settings", recordType: "settings", recordId: "company-document-presets", before, after: nextSettings, reason: data.reason });
+    await save({ action: "update-settings", recordType: "settings", recordId: "company-document-presets", before, after: nextSettings, reason: data.reason });
   }
 
   function handleUserSave(event) {
@@ -1412,6 +1478,68 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     const path = String(value || "").trim();
     if (!path || path === "assets/logo.png" || path === "/assets/logo.png") return "/logo.png";
     return path;
+  }
+
+  async function signatureImageDataUrl(file) {
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) throw new Error("Use a PNG, JPEG, or WebP image.");
+    if (file.size > 8 * 1024 * 1024) throw new Error("Signature image must be smaller than 8 MB.");
+    const source = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("The signature image could not be read."));
+      reader.readAsDataURL(file);
+    });
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("The signature image is invalid."));
+      img.src = source;
+    });
+    const scanScale = Math.min(1, 1600 / image.naturalWidth, 900 / image.naturalHeight);
+    const scan = document.createElement("canvas");
+    scan.width = Math.max(1, Math.round(image.naturalWidth * scanScale));
+    scan.height = Math.max(1, Math.round(image.naturalHeight * scanScale));
+    const scanContext = scan.getContext("2d", { willReadFrequently: true });
+    scanContext.drawImage(image, 0, 0, scan.width, scan.height);
+    const pixels = scanContext.getImageData(0, 0, scan.width, scan.height);
+    let left = scan.width;
+    let top = scan.height;
+    let right = 0;
+    let bottom = 0;
+    for (let y = 0; y < scan.height; y += 1) {
+      for (let x = 0; x < scan.width; x += 1) {
+        const index = (y * scan.width + x) * 4;
+        const visibleInk = pixels.data[index + 3] > 12 && Math.min(pixels.data[index], pixels.data[index + 1], pixels.data[index + 2]) < 242;
+        if (!visibleInk) continue;
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+    }
+    if (left > right || top > bottom) throw new Error("No visible signature could be detected.");
+    const padding = 10;
+    left = Math.max(0, left - padding);
+    top = Math.max(0, top - padding);
+    right = Math.min(scan.width - 1, right + padding);
+    bottom = Math.min(scan.height - 1, bottom + padding);
+    const cropWidth = right - left + 1;
+    const cropHeight = bottom - top + 1;
+    const scale = Math.min(1, 720 / cropWidth, 220 / cropHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(cropWidth * scale));
+    canvas.height = Math.max(1, Math.round(cropHeight * scale));
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(scan, left, top, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+    const output = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let index = 0; index < output.data.length; index += 4) {
+      if (output.data[index] > 247 && output.data[index + 1] > 247 && output.data[index + 2] > 247) output.data[index + 3] = 0;
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.putImageData(output, 0, 0);
+    const dataUrl = canvas.toDataURL("image/png");
+    if (dataUrl.length > 300000) throw new Error("Crop the signature more tightly and upload it again.");
+    return dataUrl;
   }
 
   async function handleClient(event) {
@@ -1495,7 +1623,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       return;
     }
     const service = CGM.serviceById(state, serviceId);
-    const invoice = { id: CGM.uid(), number, clientId: data.clientId, date: data.date, dueDate: data.dueDate, serviceId, projectId: project?.id || "", projectCode: project?.code || "", incomeAccountId: service?.incomeAccountId || "sales_income", notes: data.notes, items, discount: defaultDiscount(), taxRate: defaultTaxRate(), status: "issued" };
+    const invoice = { id: CGM.uid(), number, clientId: data.clientId, date: data.date, dueDate: data.dueDate, serviceId, projectId: project?.id || "", projectCode: project?.code || "", incomeAccountId: service?.incomeAccountId || "sales_income", notes: data.notes, items, discount: defaultDiscount(), taxRate: defaultTaxRate(), status: "issued", signatories: defaultDocumentSignatories(true) };
     state.invoices.unshift(invoice);
     if (!(await saveOrRollback(beforeState, { action: "create", recordType: "invoice", recordId: invoice.number, before: null, after: invoice }))) return;
     openPostSaveActions("invoice", invoice);
@@ -1524,7 +1652,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       return;
     }
     const beforeState = structuredClone(state);
-    const payment = { ...data, id: CGM.uid(), clientId: invoice?.clientId || "", projectId: invoice?.projectId || "", projectCode: invoice?.projectCode || "", serviceId: invoice?.serviceId || "", amount, receiptNumber, status: "paid" };
+    const payment = { ...data, id: CGM.uid(), clientId: invoice?.clientId || "", projectId: invoice?.projectId || "", projectCode: invoice?.projectCode || "", serviceId: invoice?.serviceId || "", amount, receiptNumber, status: "paid", signatories: structuredClone(invoice.signatories || defaultDocumentSignatories(true)) };
     state.payments.unshift(payment);
     if (!(await saveOrRollback(beforeState, { action: "create", recordType: "payment", recordId: payment.receiptNumber, before: null, after: payment }))) return;
     openPostSaveActions("payment", payment);
@@ -1613,6 +1741,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       items,
       discount: defaultDiscount(),
       taxRate: defaultTaxRate(),
+      signatories: defaultDocumentSignatories(false),
       source: "bookkeeping",
     };
     state.quotations.unshift(quote);
@@ -1690,6 +1819,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       discount: defaultDiscount(),
       taxRate: defaultTaxRate(),
       status: "issued",
+      signatories: defaultDocumentSignatories(true),
       source: "bookkeeping",
     };
     state.invoices.unshift(invoice);
@@ -1727,6 +1857,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       amount,
       receiptNumber,
       status: "paid",
+      signatories: structuredClone(invoice.signatories || defaultDocumentSignatories(true)),
       source: "bookkeeping",
     };
     state.payments.unshift(payment);
@@ -1898,9 +2029,15 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
   function approveQuotation(id) {
     const quote = state.quotations.find((item) => item.id === id);
     if (!quote || quote.status === "invoiced") return;
+    if (!["Super Admin", "Director"].includes(currentUser().role)) {
+      notify("Approval restricted", "Only an authorised Director or Super Admin session can apply the approved-by signature.", "error");
+      return;
+    }
     if (!requirePermission("quotation", "edit", quote)) return;
     const before = structuredClone(quote);
-    state.quotations = state.quotations.map((quote) => (quote.id === id ? { ...quote, status: "approved" } : quote));
+    const prepared = quote.signatories?.preparedBy || defaultDocumentSignatories(false).preparedBy;
+    const approved = defaultDocumentSignatories(true).approvedBy;
+    state.quotations = state.quotations.map((item) => (item.id === id ? { ...item, status: "approved", signatories: { preparedBy: prepared, approvedBy: approved } } : item));
     save({ action: "approve", recordType: "quotation", recordId: quote.number, before, after: state.quotations.find((item) => item.id === id), reason: "Quotation approved for invoicing" });
   }
 
@@ -1952,6 +2089,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       discount: quote.discount || defaultDiscount(),
       taxRate: quote.taxRate !== undefined ? quote.taxRate : defaultTaxRate(),
       status: "issued",
+      signatories: structuredClone(quote.signatories || defaultDocumentSignatories(true)),
       source: "bookkeeping",
     };
     state.invoices.unshift(invoice);
@@ -2254,6 +2392,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     return {
       settings: {
         companyProfile: currentSettings.companyProfile,
+        documentSignatories: currentSettings.documentSignatories,
         documentSettings: {
           ...currentSettings.documentSettings,
           currency: currentSettings.documentSettings.currency || "BWP",
@@ -2687,7 +2826,7 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
       ${isInvoice ? input("dueDate", "Due date", "date", false, record.dueDate || CGM.today()) : ""}
       ${isExpense ? input("category", "Expense category", "text", true, record.category || "") : ""}
       ${isExpense ? input("vendor", "Vendor / supplier", "text", false, record.vendor || "") : ""}
-      <label class="field">Status<select name="status">${statusOptions.map((status) => `<option value="${status}" ${CGM.statusOf(record) === status ? "selected" : ""}>${title(status)}</option>`).join("")}</select></label>
+      ${isQuote ? `<label class="field">Status<input value="${esc(title(CGM.statusOf(record)))}" disabled><input type="hidden" name="status" value="${esc(CGM.statusOf(record))}"></label>` : `<label class="field">Status<select name="status">${statusOptions.map((status) => `<option value="${status}" ${CGM.statusOf(record) === status ? "selected" : ""}>${title(status)}</option>`).join("")}</select></label>`}
       ${!isExpense ? input("projectCode", "Project code", "text", false, record.projectCode || "") : `<label class="field">Project<select name="projectId">${projectOptions(record.projectId)}</select></label>`}
       ${!isExpense ? input("projectName", "Project name", "text", false, record.projectName || "") : ""}
       ${isInvoice ? input("discount", "Discount", "number", false, record.discount || 0, "0.01") : ""}
@@ -2883,6 +3022,11 @@ import { validateExcelBlob, validatePdfBlob } from "./src/modules/exportValidati
     copy.id = CGM.uid();
     copy.status = "draft";
     copy.date = CGM.today();
+    if (["quotation", "invoice"].includes(typeName)) copy.signatories = defaultDocumentSignatories(typeName === "invoice");
+    if (typeName === "quotation") {
+      delete copy.invoiceId;
+      delete copy.quotationId;
+    }
     try {
       if (typeName === "quotation") copy.number = await officialNumber("quotation", docPrefix("quotationPrefix", "QT"), state.quotations, "number", "quotation number");
       if (typeName === "invoice") copy.number = await officialNumber("invoice", docPrefix("invoicePrefix", "INV"), state.invoices, "number", "invoice number");

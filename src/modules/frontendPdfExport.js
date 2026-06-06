@@ -108,6 +108,16 @@ async function addLetterhead(doc, template) {
   doc.setFontSize(8.5);
   setColor(doc, CGM_COLORS.black);
   doc.text(template.number || "", 196, 22, { align: "right" });
+  if (template.statusLabel) {
+    const status = asText(template.statusLabel).toUpperCase();
+    const statusWidth = Math.max(20, Math.min(34, doc.getTextWidth(status) + 8));
+    setColor(doc, status === "DRAFT" ? CGM_COLORS.soft : CGM_COLORS.paleRed, "setFillColor");
+    setColor(doc, status === "DRAFT" ? CGM_COLORS.muted : CGM_COLORS.red, "setDrawColor");
+    doc.roundedRect(196 - statusWidth, 27.5, statusWidth, 6.5, 1.2, 1.2, "FD");
+    doc.setFontSize(7);
+    setColor(doc, status === "DRAFT" ? CGM_COLORS.muted : CGM_COLORS.red);
+    doc.text(status, 196 - statusWidth / 2, 32, { align: "center" });
+  }
   if (template.tagline || company.letterhead) {
     const tagline = asText(template.tagline || company.letterhead).toUpperCase();
     const tagWidth = Math.min(118, doc.getTextWidth(tagline) + 10);
@@ -192,17 +202,47 @@ function addTermsAndApproval(doc, template, y) {
   doc.setFontSize(7.5);
   setColor(doc, CGM_COLORS.black);
   doc.text(doc.splitTextToSize(template.terms || template.paymentTerms || "", 86), 110, y + 6);
-  doc.setFont("helvetica", "bold");
-  doc.text(template.preparedByTitle || "Prepared by", 110, y + 25);
-  doc.text(template.approvedByTitle || "Approved by", 154, y + 25);
-  setColor(doc, CGM_COLORS.line, "setDrawColor");
-  doc.line(110, y + 34, 145, y + 34);
-  doc.line(154, y + 34, 190, y + 34);
-  doc.setFont("helvetica", "normal");
-  setColor(doc, CGM_COLORS.muted);
-  doc.text(template.preparedBy || " ", 110, y + 39);
-  doc.text(template.approvedBy || " ", 154, y + 39);
+  addSignatureBlock(doc, template.signatories?.preparedBy, template.preparedByTitle || "Prepared by", 110, y + 23, 36);
+  addSignatureBlock(doc, template.signatories?.approvedBy, template.approvedByTitle || "Approved by", 154, y + 23, 36);
   setColor(doc, CGM_COLORS.black);
+}
+
+function addSignatureBlock(doc, signatory, label, x, y, width) {
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7.2);
+  setColor(doc, CGM_COLORS.muted);
+  doc.text(label, x, y);
+  if (!signatory) {
+    doc.setFont("helvetica", "italic");
+    doc.text("Pending approval", x, y + 11);
+    return;
+  }
+  if (signatory.signatureImage) {
+    try {
+      const format = /^data:image\/jpe?g/i.test(signatory.signatureImage) ? "JPEG" : "PNG";
+      const props = doc.getImageProperties(signatory.signatureImage);
+      const ratio = props.width / props.height;
+      let imageWidth = Math.min(width, 31);
+      let imageHeight = imageWidth / ratio;
+      if (imageHeight > 11) {
+        imageHeight = 11;
+        imageWidth = imageHeight * ratio;
+      }
+      doc.addImage(signatory.signatureImage, format, x, y + 2, imageWidth, imageHeight, undefined, "FAST");
+    } catch (error) {
+      console.debug("Signature image could not be embedded", error);
+    }
+  }
+  setColor(doc, CGM_COLORS.line, "setDrawColor");
+  doc.line(x, y + 14, x + width, y + 14);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7.2);
+  setColor(doc, CGM_COLORS.black);
+  doc.text(doc.splitTextToSize(signatory.name || "Authorised signatory", width), x, y + 18);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.8);
+  setColor(doc, CGM_COLORS.muted);
+  doc.text(doc.splitTextToSize(signatory.title || "Authorised Signatory", width), x, y + 22);
 }
 
 function tableTheme() {
@@ -308,7 +348,7 @@ function renderStatement(doc, autoTable, template) {
   addTermsAndApproval(doc, template, 222);
 }
 
-function renderReport(doc, autoTable, template) {
+async function renderReport(doc, autoTable, template) {
   addInfoBox(doc, "Report Details", [["Generated", dateTimeValue(template.generatedAt)], ...template.filters], 14, 43, 182, template.currency);
   autoTable(doc, {
     ...tableTheme(),
@@ -317,6 +357,13 @@ function renderReport(doc, autoTable, template) {
     body: template.rows,
     styles: { ...tableTheme().styles, fontSize: template.headers.length > 5 ? 7 : 8 },
   });
+  let signatureY = (doc.lastAutoTable?.finalY || 110) + 14;
+  if (signatureY > 224) {
+    doc.addPage();
+    await addLetterhead(doc, template);
+    signatureY = 58;
+  }
+  addTermsAndApproval(doc, template, signatureY);
 }
 
 export async function buildFrontendPdfBlob(kind, payload) {
@@ -327,7 +374,7 @@ export async function buildFrontendPdfBlob(kind, payload) {
   if (template.type === "business-document") renderDocument(doc, autoTable, template);
   else if (template.type === "receipt") renderReceipt(doc, autoTable, template);
   else if (template.type === "statement") renderStatement(doc, autoTable, template);
-  else renderReport(doc, autoTable, template);
+  else await renderReport(doc, autoTable, template);
   addFooter(doc, template);
   const blob = doc.output("blob");
   const validation = await validatePdfBlob(blob);

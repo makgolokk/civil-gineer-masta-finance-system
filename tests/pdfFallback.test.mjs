@@ -30,6 +30,14 @@ const context = {
       },
     },
     documentSettings: { currency: "BWP", vatEnabled: false, vatRate: 0 },
+    documentSignatories: {
+      preparedById: "kelesitse-makgolo",
+      approvedById: "boago-modise",
+      profiles: [
+        { id: "kelesitse-makgolo", name: "Kelesitse K. Makgolo", title: "Director", signatureImage: "", active: true },
+        { id: "boago-modise", name: "Boago Modise", title: "Director", signatureImage: "", active: true },
+      ],
+    },
   },
   clients: [{ id: "client-1", name: "FoodNet Holdings Pty Ltd", email: "accounts@foodnet.example", phone: "71234567", address: "Gaborone" }],
   projects: [{ id: "project-1", code: "PRJ-2026-05-0001", name: "Warehouse plan", location: "Block 8" }],
@@ -86,8 +94,21 @@ test("shared document template carries Settings branding and financial blocks", 
     ["Account Number", "123456789"],
     ["Branch", "Main Branch | 001"],
   ]);
-  assert.equal(template.preparedBy, "Prepared Person");
-  assert.equal(template.approvedBy, "Approved Person");
+  assert.equal(template.preparedBy, "Kelesitse K. Makgolo");
+  assert.equal(template.signatories.preparedBy.name, "Kelesitse K. Makgolo");
+  assert.equal(template.signatories.approvedBy.name, "Boago Modise");
+  assert.equal(template.statusLabel, "Approved");
+});
+
+test("quotation signatures follow draft and approved states", () => {
+  const draft = templateForPayload("quotation", { ...quotationPayload, document: { ...quotationPayload.document, status: "draft" } });
+  const approved = templateForPayload("quotation", { ...quotationPayload, document: { ...quotationPayload.document, status: "approved" } });
+
+  assert.equal(draft.signatories.preparedBy.name, "Kelesitse K. Makgolo");
+  assert.equal(draft.signatories.approvedBy, null);
+  assert.equal(draft.statusLabel, "Draft");
+  assert.equal(approved.signatories.approvedBy.name, "Boago Modise");
+  assert.equal(approved.statusLabel, "Approved");
 });
 
 test("browser fallback generates a usable quotation PDF blob", async () => {
@@ -99,6 +120,20 @@ test("browser fallback generates a usable quotation PDF blob", async () => {
   assert.equal(header, "%PDF-");
   const pdfText = Buffer.from(await blob.arrayBuffer()).toString("latin1");
   assert.match(pdfText, /\/Subtype\s*\/Image/);
+});
+
+test("approved document PDFs embed authorised signature images", async () => {
+  const signature = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAATSURBVBhXYwCC//+BGAhBiOE/ADLfBftP/2lzAAAAAElFTkSuQmCC";
+  const signedContext = structuredClone(context);
+  signedContext.settings.documentSignatories.profiles.forEach((profile) => { profile.signatureImage = signature; });
+  const blob = await withMockedLogoFetch(() => buildFallbackPdfBlob("quotation", {
+    context: signedContext,
+    document: { ...quotationPayload.document, status: "approved" },
+  }));
+  const pdfText = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  const imageObjects = pdfText.match(/\/Subtype\s*\/Image/g) || [];
+
+  assert.ok(imageObjects.length >= 2);
 });
 
 test("document Excel fallback includes Settings banking and approval blocks", async () => {
@@ -118,7 +153,7 @@ test("document Excel fallback includes Settings banking and approval blocks", as
   assert.match(joined, /Settings Bank/);
   assert.match(joined, /123456789/);
   assert.match(joined, /Configured payment terms from Settings/);
-  assert.match(joined, /Prepared Person/);
+  assert.match(joined, /Kelesitse K. Makgolo/);
   assert.match(joined, /Configured footer text/);
 });
 

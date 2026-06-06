@@ -47,6 +47,25 @@ export function termsText(company = {}, context = {}, document = {}) {
   return document.paymentTerms || company.defaultTerms || documentSettings(context).defaultPaymentTerms || "Payment due as agreed.";
 }
 
+export function defaultSignatory(context = {}, role = "preparedBy") {
+  const config = context.settings?.documentSignatories || {};
+  const id = role === "approvedBy" ? config.approvedById : config.preparedById;
+  const profile = (config.profiles || []).find((item) => item.id === id && item.active !== false);
+  if (profile) return { id: profile.id, name: profile.name || "", title: profile.title || "Authorised Signatory", signatureImage: profile.signatureImage || "" };
+  const company = companyProfile(context);
+  const name = role === "approvedBy" ? company.approvedBy : company.preparedBy;
+  const title = role === "approvedBy" ? company.approvedByTitle : company.preparedByTitle;
+  return name ? { id: "", name, title: title || "Authorised Signatory", signatureImage: "" } : null;
+}
+
+export function resolveSignatories(context = {}, record = {}, includeApproved = true) {
+  const saved = record.signatories || {};
+  return {
+    preparedBy: saved.preparedBy || defaultSignatory(context, "preparedBy"),
+    approvedBy: includeApproved ? (saved.approvedBy || defaultSignatory(context, "approvedBy")) : null,
+  };
+}
+
 export function findById(items = [], id = "") {
   return items.find((item) => item.id === id) || null;
 }
@@ -89,10 +108,14 @@ export function buildBusinessDocumentTemplate(kind, payload = {}) {
   const defaultNotes = company.defaultNotes || "";
   const terms = termsText(company, context, document);
   const bankRows = bankingRows(company);
+  const status = asText(document.status || "draft").toLowerCase();
+  const includeApproved = kind !== "quotation" || ["approved", "invoiced"].includes(status);
+  const signatories = resolveSignatories(context, document, includeApproved);
   return {
     type: "business-document",
     kind,
     title,
+    statusLabel: titleCase(status),
     number,
     filenameTitle: `${title} ${number}`,
     company,
@@ -136,10 +159,11 @@ export function buildBusinessDocumentTemplate(kind, payload = {}) {
     notes: [document.notes || defaultNotes, document.exclusions].filter(Boolean),
     paymentTerms: terms,
     terms,
-    preparedBy: document.preparedBy || company.preparedBy || "",
-    preparedByTitle: company.preparedByTitle || "Prepared by",
-    approvedBy: document.approvedBy || company.approvedBy || "",
-    approvedByTitle: company.approvedByTitle || "Approved / Client signature",
+    signatories,
+    preparedBy: signatories.preparedBy?.name || "",
+    preparedByTitle: "Prepared by",
+    approvedBy: signatories.approvedBy?.name || "",
+    approvedByTitle: "Approved by",
     bankingDetails: company.bankingDetails || {},
     bankingRows: bankRows,
     meta: [
@@ -163,10 +187,12 @@ export function buildReceiptTemplate(payload = {}) {
   const invoiceTotal = documentTotal(invoice);
   const paidTotal = (context.payments || []).filter((payment) => payment.invoiceId === receipt.invoiceId).reduce((sum, payment) => sum + asNumber(payment.amount), 0);
   const number = receipt.receiptNumber || receipt.number || "Receipt";
+  const signatories = resolveSignatories(context, receipt.signatories ? receipt : invoice, true);
   return {
     type: "receipt",
     kind: "receipt",
     title: "Receipt",
+    statusLabel: "Issued",
     number,
     filenameTitle: `Receipt ${number}`,
     company,
@@ -197,10 +223,11 @@ export function buildReceiptTemplate(payload = {}) {
     ],
     terms: termsText(company, context, receipt),
     paymentTerms: termsText(company, context, receipt),
-    preparedBy: receipt.preparedBy || company.preparedBy || "",
-    preparedByTitle: company.preparedByTitle || "Prepared by",
-    approvedBy: receipt.approvedBy || company.approvedBy || "",
-    approvedByTitle: company.approvedByTitle || "Approved / Client signature",
+    signatories,
+    preparedBy: signatories.preparedBy?.name || "",
+    preparedByTitle: "Prepared by",
+    approvedBy: signatories.approvedBy?.name || "",
+    approvedByTitle: "Approved by",
     bankingDetails: company.bankingDetails || {},
     bankingRows: bankingRows(company),
     notes: [`Thank you for your payment. This receipt confirms funds recorded against invoice ${invoice.number || receipt.invoiceId || ""}.`],
@@ -214,10 +241,12 @@ export function buildStatementTemplate(payload = {}) {
   const company = companyProfile(context);
   const currency = exportCurrency(context);
   const client = statement.client || {};
+  const signatories = resolveSignatories(context, statement, true);
   return {
     type: "statement",
     kind: "client-statement",
     title: "Statement of Account",
+    statusLabel: "Issued",
     number: statement.statementNumber || client.name || "Statement",
     filenameTitle: `${client.name || "Client"} Statement`,
     company,
@@ -246,15 +275,22 @@ export function buildStatementTemplate(payload = {}) {
     paymentTerms: termsText(company, context, statement),
     bankingDetails: company.bankingDetails || {},
     bankingRows: bankingRows(company),
+    signatories,
+    preparedBy: signatories.preparedBy?.name || "",
+    preparedByTitle: "Prepared by",
+    approvedBy: signatories.approvedBy?.name || "",
+    approvedByTitle: "Approved by",
     meta: [["Client", client.name || ""], ["Closing balance", moneyValue(statement.balance, currency)]],
   };
 }
 
 export function buildReportTemplate(report = {}, context = {}, options = {}) {
+  const signatories = resolveSignatories(context, report, true);
   return {
     type: "report",
     kind: options.kind || "report",
     title: report.title || "Report",
+    statusLabel: "Issued",
     number: "",
     filenameTitle: report.title || "Report",
     company: companyProfile(context),
@@ -267,6 +303,11 @@ export function buildReportTemplate(report = {}, context = {}, options = {}) {
     rows: report.rows || [],
     filters: options.filters || [],
     generatedAt: report.generatedAt || new Date().toISOString(),
+    signatories,
+    preparedBy: signatories.preparedBy?.name || "",
+    preparedByTitle: "Prepared by",
+    approvedBy: signatories.approvedBy?.name || "",
+    approvedByTitle: "Approved by",
     meta: [["Generated", new Date(report.generatedAt || Date.now()).toLocaleString("en-BW")], ...(options.filters || [])],
   };
 }

@@ -1515,6 +1515,86 @@ tbody tr:hover {
   padding-top: 7px;
 }
 
+.preview-signatures {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.preview-signature {
+  display: grid;
+  align-content: end;
+  gap: 3px;
+  min-height: 112px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 7px;
+}
+
+.preview-signature img {
+  width: min(100%, 150px);
+  height: 58px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.preview-signature span,
+.preview-signature small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.settings-subsection {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.signatory-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.signatory-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.signatory-preview {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  border: 1px dashed var(--line);
+  background: #fafafa;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.signatory-preview img {
+  width: min(100%, 260px);
+  height: 88px;
+  object-fit: contain;
+}
+
+.check-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--text-sm);
+}
+
+.check-field input {
+  width: auto;
+}
+
+.signatory-defaults {
+  margin-top: 14px;
+}
+
 .professional-doc footer {
   border-top: 3px solid var(--red);
   padding-top: 10px;
@@ -1682,6 +1762,10 @@ pre {
 }
 
 @media (max-width: 760px) {
+  .signatory-grid {
+    grid-template-columns: 1fr;
+  }
+
   :root {
     --text-2xl: 1.45rem;
     --text-3xl: 1.9rem;
